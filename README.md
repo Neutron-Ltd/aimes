@@ -4,7 +4,7 @@ Enterprise Manufacturing Execution System (MES) AI Assistant backend for the **N
 
 **Stack:** Python 3.10+, FastAPI, Pydantic v2, SQLAlchemy 2.0 (async), asyncpg, dashscope (Bailian SDK).
 
-**Current version:** `0.2.0` — Phase 2 Production Data Analysis (I.1) + Feature 1.2 Bailian Intent Router
+**Current version:** `0.3.0` — RAG pipeline, expanded MCP tools (Production/Quality/Warehouse), voice/export/cross-module utilities
 
 ---
 
@@ -49,14 +49,16 @@ sequenceDiagram
 4. `route_and_execute()` switches on `IntentType` and calls the matching Phase 2 MCP tool.
 5. MCP tool queries PostgreSQL, computes statistics in Python, returns JSON to the client.
 
-**Intent routing map:**
+**Intent routing map (v0.3 — 18 tools):**
 
-| `IntentType` | MCP Tool | Example query |
+| Module | `IntentType` examples | MCP Tool |
 |---|---|---|
-| `yield_aggregation` | `get_yield_aggregation` | "Total equipment yield on line L-03 for today" |
-| `yield_anomalies` | `get_yield_anomalies_and_peaks` | "Show volatility on line L-01 this week" |
-| `yield_comparison` | `compare_yield_periods` | "Compare growth yesterday vs today on line L-02" |
-| `unknown` | *(none)* | Unrecognized or failed intent extraction |
+| Production | `yield_aggregation`, `production_root_cause`, `production_product_yield` | `get_yield_aggregation`, `get_production_root_cause`, … |
+| Quality | `quality_defect_analysis`, `quality_error_prevention` | `get_quality_defect_aggregation`, `check_error_prevention`, … |
+| Warehouse | `warehouse_inventory_monitor`, `warehouse_trace_forward` | `get_inventory_status`, `trace_material_forward`, … |
+| System | `cross_module_analysis`, `export_report` | `cross_module_analysis`, `POST /export` |
+
+RAG context is attached to `metadata.rag_context` for anomaly/root-cause intents when `enrich_response=true`.
 
 ---
 
@@ -82,6 +84,10 @@ Open **http://127.0.0.1:8000/** (redirects to Swagger) or **http://127.0.0.1:800
 | `DEFAULT_WORKSHOP_ID` | No | Fallback workshop when no `X-MES-Workshop-Id` header (default: `WS-001`) |
 | `DB_POOL_SIZE` | No | Connection pool size (default: `5`) |
 | `DEBUG` | No | Enable SQL echo, Bailian raw response logging, and tool result debug logs |
+| `RAG_BACKEND` | No | `pgvector` \| `chroma` \| file fallback (default: `chroma` → file) |
+| `RAG_EMBEDDING_MODEL` | No | DashScope embedding model (default: `text-embedding-v2`) |
+| `CHROMA_PERSIST_DIR` | No | Local vector store path (default: `./data/chroma`) |
+| `VOICE_MOCK` | No | Return mock transcript when `true` (default: `true`) |
 
 \*Without Bailian credentials the app still starts; queries return `intent: unknown` with a logged warning.
 
@@ -93,36 +99,27 @@ Open **http://127.0.0.1:8000/** (redirects to Swagger) or **http://127.0.0.1:800
 
 ```
 mesai/
-├── main.py                     # FastAPI entry point (lifespan, RBAC, / → /docs redirect)
-├── requirements.txt
-├── .env.example                # Environment template (never commit .env)
-├── README.md
-│
-├── api/
-│   └── routes.py               # /api/v1/health, /api/v1/query
-│
+├── main.py
+├── api/routes.py               # query, voice, rag/ingest, export
 ├── core/
-│   ├── config.py               # Pydantic Settings (.env loader)
-│   ├── db.py                   # Async SQLAlchemy engine & sessions
-│   ├── logging.py
-│   ├── math_safeguard.py       # Feature 5.2 — server-side statistics
-│   └── security.py             # Feature 13.1 — RBAC middleware
-│
-├── models/
-│   └── schemas.py              # IntentSchema, MCPContext, API models
-│
+│   ├── rag/                    # store, ingest, retriever
+│   ├── analytics/              # root_cause, scheduling, capacity
+│   ├── export/                 # excel, pdf
+│   └── voice/                  # transcribe
+├── models/intents/             # production, quality, warehouse, system
 ├── mcp_tools/
-│   ├── base.py                 # BaseMCPTool abstract class
-│   └── production_tools.py     # Phase 2 — 3 real DB tools
-│
+│   ├── production_tools.py     # 6 production tools
+│   ├── production_engines.py   # root cause, scheduling, capacity
+│   ├── quality_tools.py        # 4 quality tools
+│   └── warehouse_tools.py      # 5 warehouse tools
 ├── orchestrator/
-│   └── router.py               # Bailian intent router + MCP dispatcher
-│
-├── db/                         # Reference schema exports (not runtime)
-│   ├── schema.sql
-│   └── may.sql
-│
-└── docs/                       # Product documentation (Word)
+│   ├── router.py               # slim dispatcher
+│   ├── tool_registry.py        # intent → tool map
+│   ├── param_mappers.py
+│   ├── intent_prompt.py
+│   ├── intent_utils.py
+│   └── cross_module.py
+└── db/migrations/001_rag_pgvector.sql
 ```
 
 ---
@@ -143,8 +140,11 @@ mesai/
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/v1/health` | GET | Liveness: `{"status": "ok", "service": "neutron-mes-ai"}` |
-| `/api/v1/query` | POST | Natural-language query → Bailian intent → MCP tool → result |
+| `/api/v1/health` | GET | Liveness + version |
+| `/api/v1/query` | POST | NL query → Bailian → MCP tool |
+| `/api/v1/query/voice` | POST | Audio upload → transcribe → query |
+| `/api/v1/rag/ingest` | POST | Ingest SOP/anomaly/solution into RAG |
+| `/api/v1/export` | POST | Export result as xlsx or pdf |
 
 **Swagger headers for RBAC simulation:**
 
@@ -304,7 +304,10 @@ Key tables: `t_smt_program_consumption_record`, `t_wip_detail`, `t_co_area`.
 | `sqlalchemy[asyncio]` | Async DB |
 | `asyncpg` | PostgreSQL driver |
 | `dashscope==1.20.0` | Alibaba Bailian / DashScope SDK |
-| `python-dateutil` | Date utilities |
+| `pgvector` | PostgreSQL vector extension client |
+| `pandas` / `openpyxl` | Excel export |
+| `reportlab` | PDF export |
+| `python-multipart` | Voice file uploads |
 
 ---
 
@@ -321,12 +324,13 @@ Key tables: `t_smt_program_consumption_record`, `t_wip_detail`, `t_co_area`.
 - [x] `t_wip_detail` ↔ `t_co_area` join for reported yield
 - [x] Mathematical safeguard layer
 
-### Feature 1.2 — Bailian AI Intent Router (Complete)
-- [x] `dashscope` SDK integration
-- [x] Async `parse_intent()` via `asyncio.to_thread`
-- [x] JSON sanitization + `IntentSchema` mapping
-- [x] Graceful `UNKNOWN` fallback
-- [x] Orchestrator wired to Phase 2 tools (Phase 1 mock deprecated)
+### v0.3 — Full Backend Upgrade (Complete)
+- [x] RAG pipeline (pgvector + file fallback) + `/api/v1/rag/ingest`
+- [x] Tool registry + param mappers (18 MCP tools)
+- [x] Production extensions (`t_co_item`, `t_co_device`, `t_co_standard_time`) + analytics engines
+- [x] Quality module (4 tools → `t_qm_*`)
+- [x] Warehouse module (5 tools → `t_wms_*`)
+- [x] Voice query, export xlsx/pdf, cross-module analysis
 
 ### Known Gaps
 
@@ -360,11 +364,17 @@ curl -X POST http://127.0.0.1:8000/api/v1/query \
   -H "X-MES-Workshop-Id: WS-042" \
   -d '{"query": "Show volatility on line L-01 this week"}'
 
-# Period comparison
+# RAG ingest (Swagger)
+curl -X POST http://127.0.0.1:8000/api/v1/rag/ingest \
+  -H "Content-Type: application/json" \
+  -H "X-MES-Workshop-Id: WS-042" \
+  -d '{"doc_type": "anomaly", "text": "Line L-01 dip caused by feeder jam on device SN-42"}'
+
+# Cross-module analysis
 curl -X POST http://127.0.0.1:8000/api/v1/query \
   -H "Content-Type: application/json" \
   -H "X-MES-Workshop-Id: WS-042" \
-  -d '{"query": "Compare yield growth yesterday vs today on line L-02"}'
+  -d '{"query": "Cross-module analysis for line L-01"}'
 ```
 
 ### Direct MCP tool invocation (bypasses Bailian)

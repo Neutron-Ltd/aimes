@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """NEUTRON MES AI Assistant — Phase 2 settings."""
+    """NEUTRON MES AI Assistant — v0.3 settings."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -16,10 +16,9 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "NEUTRON MES AI Assistant"
-    app_version: str = "0.2.0"
+    app_version: str = "0.3.0"
     debug: bool = False
 
-    # Async PostgreSQL DSN — override via DATABASE_URL in .env for production
     database_url: str = Field(
         default=(
             "postgresql+asyncpg://mes_readonly:YOUR_PASSWORD@"
@@ -28,13 +27,20 @@ class Settings(BaseSettings):
         validation_alias="DATABASE_URL",
     )
     db_pool_size: int = 5
-
-    # Default workshop when no RBAC header is supplied (dev only)
     default_workshop_id: str = "WS-001"
 
-    # Alibaba Cloud Bailian (DashScope) — Intent Router (Feature 1.2)
     dashscope_api_key: str = Field(default="", validation_alias="DASHSCOPE_API_KEY")
     bailian_app_id: str = Field(default="", validation_alias="BAILIAN_APP_ID")
+
+    rag_backend: str = Field(default="chroma", validation_alias="RAG_BACKEND")
+    rag_embedding_model: str = Field(
+        default="text-embedding-v2", validation_alias="RAG_EMBEDDING_MODEL"
+    )
+    chroma_persist_dir: str = Field(
+        default="./data/chroma", validation_alias="CHROMA_PERSIST_DIR"
+    )
+
+    voice_mock: bool = Field(default=True, validation_alias="VOICE_MOCK")
 
 
 @lru_cache

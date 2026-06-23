@@ -522,7 +522,190 @@ class CompareYieldPeriodsTool(
             await session.close()
 
 
+# ---------------------------------------------------------------------------
+# Tool 4: get_product_yield (t_co_item join)
+# ---------------------------------------------------------------------------
+
+
+class GetProductYieldTool(BaseMCPTool):
+    name = "get_product_yield"
+    description = "Product-specific reported yield per line with t_co_item metadata."
+
+    async def execute(self, params, context: MCPContext):
+        from models.intents.production import ProductYieldParams, ProductYieldResult
+
+        session = await get_session()
+        try:
+            sql = text(
+                """
+                SELECT date_trunc('day', COALESCE(wd.in_time, wd.create_time)) AS bucket,
+                       SUM(COALESCE(wd.pro_qty, 0) - COALESCE(wd.ng_qty, 0)
+                           - COALESCE(wd.scrap_qty, 0)) AS good_qty,
+                       ci.item_name
+                FROM n2admin.t_wip_detail wd
+                JOIN n2admin.t_co_area ws ON wd.work_stationsn = ws.area_sn
+                JOIN n2admin.t_co_area line ON ws.parent_sn = line.area_sn
+                JOIN n2admin.t_co_item ci ON wd.model_code = ci.item_code
+                WHERE line.area_sn = :line_id
+                  AND wd.model_code = :product_code
+                  AND wd.data_auth = :workshop_id
+                  AND COALESCE(wd.in_time, wd.create_time)
+                      BETWEEN :start_date AND :end_date
+                GROUP BY bucket, ci.item_name
+                ORDER BY bucket
+                """
+            )
+            result = await session.execute(
+                sql,
+                {
+                    "line_id": params.line_id,
+                    "product_code": params.product_code,
+                    "workshop_id": context.workshop_id,
+                    "start_date": params.start_date,
+                    "end_date": params.end_date,
+                },
+            )
+            rows = [dict(r) for r in result.mappings().all()]
+            total = sum(float(r.get("good_qty") or 0) for r in rows)
+            breakdown = [
+                {
+                    "bucket": r["bucket"].isoformat() if r.get("bucket") else None,
+                    "good_qty": float(r.get("good_qty") or 0),
+                    "item_name": r.get("item_name"),
+                }
+                for r in rows
+            ]
+            return ProductYieldResult(
+                line_id=params.line_id,
+                product_code=params.product_code,
+                workshop_id=context.workshop_id,
+                total_qty=round(total, 4),
+                breakdown=breakdown,
+            )
+        finally:
+            await session.close()
+
+
+# ---------------------------------------------------------------------------
+# Tool 5: get_device_production_rate (t_co_device join)
+# ---------------------------------------------------------------------------
+
+
+class GetDeviceProductionRateTool(BaseMCPTool):
+    name = "get_device_production_rate"
+    description = "Average equipment production rate joined with t_co_device."
+
+    async def execute(self, params, context: MCPContext):
+        from models.intents.production import DeviceRateParams, DeviceRateResult
+
+        session = await get_session()
+        try:
+            filters = ["eq.data_auth = :workshop_id", "eq.create_time BETWEEN :start_date AND :end_date"]
+            bind: dict[str, Any] = {
+                "workshop_id": context.workshop_id,
+                "start_date": params.start_date,
+                "end_date": params.end_date,
+            }
+            if params.device_sn:
+                filters.append("eq.device_sn = :device_sn")
+                bind["device_sn"] = params.device_sn
+            if params.line_id:
+                filters.append("eq.area_sn = :line_id")
+                bind["line_id"] = params.line_id
+
+            where = " AND ".join(filters)
+            sql = text(
+                f"""
+                SELECT eq.device_sn, d.device_name,
+                       AVG(COALESCE(eq.finish_qty, 0)) AS avg_rate,
+                       SUM(COALESCE(eq.finish_qty, 0)) AS total_qty
+                FROM n2admin.t_smt_program_consumption_record eq
+                JOIN n2admin.t_co_device d ON eq.device_sn = d.device_sn
+                WHERE {where}
+                GROUP BY eq.device_sn, d.device_name
+                ORDER BY avg_rate DESC
+                """
+            )
+            result = await session.execute(sql, bind)
+            devices = [
+                {
+                    "device_sn": r["device_sn"],
+                    "device_name": r.get("device_name"),
+                    "avg_rate": round(float(r.get("avg_rate") or 0), 4),
+                    "total_qty": round(float(r.get("total_qty") or 0), 4),
+                }
+                for r in result.mappings().all()
+            ]
+            return DeviceRateResult(workshop_id=context.workshop_id, devices=devices)
+        finally:
+            await session.close()
+
+
+# ---------------------------------------------------------------------------
+# Tool 6: get_standard_time_achievement (t_co_standard_time join)
+# ---------------------------------------------------------------------------
+
+
+class GetStandardTimeAchievementTool(BaseMCPTool):
+    name = "get_standard_time_achievement"
+    description = "Actual output vs standard_time goal percentage."
+
+    async def execute(self, params, context: MCPContext):
+        from models.intents.production import (
+            StandardTimeAchievementParams,
+            StandardTimeAchievementResult,
+        )
+
+        session = await get_session()
+        try:
+            sql = text(
+                """
+                SELECT SUM(COALESCE(eq.finish_qty, 0)) AS actual_qty,
+                       MAX(st.standard_time) AS standard_time,
+                       EXTRACT(EPOCH FROM (MAX(eq.create_time) - MIN(eq.create_time))) / 3600.0
+                           AS elapsed_hours
+                FROM n2admin.t_smt_program_consumption_record eq
+                JOIN n2admin.t_co_standard_time st
+                  ON eq.area_sn = st.area_sn AND eq.model_code = st.model_code
+                WHERE eq.area_sn = :line_id
+                  AND eq.model_code = :model_code
+                  AND eq.data_auth = :workshop_id
+                  AND eq.create_time BETWEEN :start_date AND :end_date
+                """
+            )
+            result = await session.execute(
+                sql,
+                {
+                    "line_id": params.line_id,
+                    "model_code": params.model_code,
+                    "workshop_id": context.workshop_id,
+                    "start_date": params.start_date,
+                    "end_date": params.end_date,
+                },
+            )
+            row = result.mappings().first() or {}
+            actual = float(row.get("actual_qty") or 0)
+            std_time = float(row.get("standard_time") or 1)
+            elapsed = max(float(row.get("elapsed_hours") or 1), 0.01)
+            achievement = (actual / (std_time * elapsed)) * 100.0
+
+            return StandardTimeAchievementResult(
+                line_id=params.line_id,
+                model_code=params.model_code,
+                workshop_id=context.workshop_id,
+                achievement_pct=round(achievement, 4),
+                actual_qty=round(actual, 4),
+                standard_time=round(std_time, 4),
+                elapsed_hours=round(elapsed, 4),
+            )
+        finally:
+            await session.close()
+
+
 # Singleton instances for orchestrator registration
 get_yield_aggregation_tool = GetYieldAggregationTool()
 get_yield_anomalies_tool = GetYieldAnomaliesAndPeaksTool()
 compare_yield_periods_tool = CompareYieldPeriodsTool()
+get_product_yield_tool = GetProductYieldTool()
+get_device_production_rate_tool = GetDeviceProductionRateTool()
+get_standard_time_achievement_tool = GetStandardTimeAchievementTool()

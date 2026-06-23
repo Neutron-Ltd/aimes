@@ -10,8 +10,6 @@ from pydantic import BaseModel, Field
 
 
 class TimeFrame(str, Enum):
-    """Supported aggregation windows for production queries."""
-
     HOUR = "hour"
     DAY = "day"
     WEEK = "week"
@@ -20,47 +18,68 @@ class TimeFrame(str, Enum):
 
 
 class IntentType(str, Enum):
-    """Routing paths for Phase 2 production MCP tools."""
+    """Routing paths for v0.3 MCP tools."""
 
+    # Production (Phase 2)
     YIELD_AGGREGATION = "yield_aggregation"
     YIELD_ANOMALIES = "yield_anomalies"
     YIELD_COMPARISON = "yield_comparison"
+    PRODUCTION_ROOT_CAUSE = "production_root_cause"
+    PRODUCTION_SCHEDULING_OPT = "production_scheduling_opt"
+    PRODUCTION_CAPACITY_FORECAST = "production_capacity_forecast"
+    PRODUCTION_PRODUCT_YIELD = "production_product_yield"
+    PRODUCTION_DEVICE_RATE = "production_device_rate"
+    PRODUCTION_STANDARD_TIME = "production_standard_time"
+
+    # Quality (Phase 3)
+    QUALITY_DEFECT_ANALYSIS = "quality_defect_analysis"
+    QUALITY_ROOT_CAUSE = "quality_root_cause"
+    QUALITY_ERROR_PREVENTION = "quality_error_prevention"
+    QUALITY_EFFECTIVENESS_VERIFY = "quality_effectiveness_verify"
+
+    # Warehouse (Phase 4)
+    WAREHOUSE_INVENTORY_MONITOR = "warehouse_inventory_monitor"
+    WAREHOUSE_INBOUND_OUTBOUND = "warehouse_inbound_outbound"
+    WAREHOUSE_OBSOLETE_PROFILE = "warehouse_obsolete_profile"
+    WAREHOUSE_TRACE_FORWARD = "warehouse_trace_forward"
+    WAREHOUSE_TRACE_REVERSE = "warehouse_trace_reverse"
+
+    # System (Phase 5)
+    EXPORT_REPORT = "export_report"
+    CROSS_MODULE_ANALYSIS = "cross_module_analysis"
+    VOICE_QUERY = "voice_query"
+
     UNKNOWN = "unknown"
 
 
 class IntentSchema(BaseModel):
-    """
-    Structured output from the LLM intent router.
-
-    The orchestrator maps natural language to this schema; no raw SQL is
-    generated — only typed parameters consumed by predefined MCP tools.
-    """
+    """Structured output from the LLM intent router."""
 
     intent: IntentType = IntentType.UNKNOWN
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     time_frame: Optional[TimeFrame] = None
     model_code: Optional[str] = None
+    product_code: Optional[str] = None
+    device_sn: Optional[str] = None
+    batch_lot: Optional[str] = None
+    material_batch: Optional[str] = None
+    finished_lot: Optional[str] = None
+    process_code: Optional[str] = None
     line_id: Optional[str] = None
-    yield_type: str = Field(
-        default="equipment",
-        description="equipment or reported — defaults to equipment unless stated",
-    )
-    group_by: Optional[str] = Field(
-        default=None, description="daily | hourly | total (aggregation intent)"
-    )
-    metric: Optional[str] = Field(
-        default=None, description="sum | average | achievement_rate (aggregation intent)"
-    )
-    analysis_type: Optional[str] = Field(
-        default=None,
-        description="volatility | below_standard | peak_hourly (anomalies intent)",
-    )
+    yield_type: str = Field(default="equipment")
+    group_by: Optional[str] = None
+    metric: Optional[str] = None
+    analysis_type: Optional[str] = None
     threshold_percentage: Optional[float] = None
     period_1_start: Optional[date] = None
     period_1_end: Optional[date] = None
     period_2_start: Optional[date] = None
     period_2_end: Optional[date] = None
+    export_format: Optional[str] = Field(default=None, description="xlsx | pdf")
+    doc_type: Optional[str] = Field(default=None, description="sop | anomaly | solution")
+    wh_code: Optional[str] = None
+    item_code: Optional[str] = None
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     raw_query: str = ""
 
@@ -81,37 +100,55 @@ class BailianIntentExtraction(BaseModel):
     period_1_end: Optional[str] = None
     period_2_start: Optional[str] = None
     period_2_end: Optional[str] = None
+    product_code: Optional[str] = None
+    model_code: Optional[str] = None
+    device_sn: Optional[str] = None
+    batch_lot: Optional[str] = None
+    material_batch: Optional[str] = None
+    finished_lot: Optional[str] = None
+    process_code: Optional[str] = None
+    export_format: Optional[str] = None
+    doc_type: Optional[str] = None
+    wh_code: Optional[str] = None
+    item_code: Optional[str] = None
 
 
 class MCPContext(BaseModel):
-    """
-    RBAC context injected by middleware and forwarded to every MCP tool call.
-
-    workshop_id scopes data access to the caller's MES permission boundary.
-    """
-
     workshop_id: str
     user_id: Optional[str] = None
     permission_level: str = "operator"
 
 
 class OrchestratorRequest(BaseModel):
-    """API request body for the intent-routing endpoint."""
-
-    query: str = Field(
-        ...,
-        min_length=1,
-        examples=[
-            "Calculate the total reported/equipment yield of the corresponding "
-            "products on line L-03 for the current day"
-        ],
+    query: str = Field(..., min_length=1)
+    enrich_response: bool = Field(
+        default=True,
+        description="When true, attach RAG context to response metadata",
     )
 
 
 class OrchestratorResponse(BaseModel):
-    """Full pipeline response: parsed intent + MCP tool result."""
-
     intent: IntentSchema
     tool_name: Optional[str] = None
     result: Optional[dict[str, Any]] = None
     message: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    transcript: Optional[str] = None
+
+
+class RagIngestRequest(BaseModel):
+    doc_type: str = Field(..., description="sop | anomaly | solution")
+    text: str = Field(..., min_length=1)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class RagIngestResponse(BaseModel):
+    success: bool
+    chunk_id: Optional[str] = None
+    backend: str
+    message: str = ""
+
+
+class ExportRequest(BaseModel):
+    result: dict[str, Any]
+    format: str = Field(..., pattern="^(xlsx|pdf)$")
