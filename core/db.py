@@ -1,91 +1,104 @@
 """
-F0.4 — Mock Database Connection Manager (MES Data Bridge).
+F0.4 — Async SQLAlchemy Database Bridge (MES Data Bridge).
 
-This module simulates a secure, read-only connection pool to the MES
-relational database. In production it will wrap asyncpg/SQLAlchemy with
-connection pooling, credential rotation, and query timeouts.
+Provides a non-blocking PostgreSQL connection pool for time-series
+aggregations. MCP tools receive sessions via get_db() or async_session_factory.
 
-IMPORTANT: The AI orchestrator NEVER generates SQL. MCP tools call
-predefined repository methods that execute vetted queries server-side.
+IMPORTANT: The AI orchestrator NEVER generates SQL. MCP tools execute
+predefined, parameterized queries via sqlalchemy.text() only.
 """
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Optional
+from collections.abc import AsyncIterator
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from core.config import get_settings
 from core.logging import get_logger
 
 logger = get_logger(__name__)
 
-
-@dataclass
-class MockConnection:
-    """Simulated database connection handle."""
-
-    dsn: str
-    is_connected: bool = True
-    _query_log: list[str] = field(default_factory=list)
-
-    async def execute(self, query_name: str, params: Optional[dict[str, Any]] = None) -> list[dict[str, Any]]:
-        """
-        Execute a named, pre-approved query stub.
-
-        Real implementation will map query_name → parameterized SQL via
-        a query registry; LLMs have no access to this layer.
-        """
-        self._query_log.append(query_name)
-        logger.debug("Mock DB execute: %s params=%s", query_name, params)
-        return []
-
-    async def close(self) -> None:
-        self.is_connected = False
+engine: AsyncEngine | None = None
+async_session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
-class DatabaseManager:
-    """
-    Singleton-style manager for MES database connections.
+def _build_engine() -> AsyncEngine:
+    settings = get_settings()
+    return create_async_engine(
+        settings.database_url,
+        pool_pre_ping=True,
+        pool_size=settings.db_pool_size,
+        max_overflow=10,
+        echo=settings.debug,
+    )
 
-    Provides async context-managed connections for MCP tool execution.
-    """
 
-    def __init__(self) -> None:
-        settings = get_settings()
-        self._dsn = (
-            f"postgresql://{settings.db_user}@{settings.db_host}:"
-            f"{settings.db_port}/{settings.db_name}"
+async def init_db() -> None:
+    """Initialize engine and verify connectivity (SELECT 1)."""
+    global engine, async_session_factory
+
+    if engine is not None:
+        return
+
+    engine = _build_engine()
+    async_session_factory = async_sessionmaker(
+        engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
+
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        logger.info("Database connection pool initialized")
+    except Exception:
+        logger.exception(
+            "Database connectivity check failed — MCP tools may error until "
+            "DATABASE_URL is reachable"
         )
-        self._pool: list[MockConnection] = []
-        self._initialized = False
 
-    async def initialize(self) -> None:
-        if self._initialized:
-            return
-        settings = get_settings()
-        for _ in range(settings.db_pool_size):
-            self._pool.append(MockConnection(dsn=self._dsn))
-        self._initialized = True
-        logger.info("Mock database pool initialized (%d connections)", len(self._pool))
 
-    async def shutdown(self) -> None:
-        for conn in self._pool:
-            await conn.close()
-        self._pool.clear()
-        self._initialized = False
-        logger.info("Mock database pool shut down")
+async def close_db() -> None:
+    """Dispose engine and release pool connections."""
+    global engine, async_session_factory
 
-    @asynccontextmanager
-    async def acquire(self) -> AsyncIterator[MockConnection]:
-        if not self._initialized:
-            await self.initialize()
-        conn = self._pool[0] if self._pool else MockConnection(dsn=self._dsn)
+    if engine is not None:
+        await engine.dispose()
+        logger.info("Database connection pool shut down")
+
+    engine = None
+    async_session_factory = None
+
+
+async def get_db() -> AsyncIterator[AsyncSession]:
+    """
+    FastAPI dependency — yields an async session per request.
+
+    Inject into route handlers or MCP tool execution via Depends(get_db).
+    """
+    if async_session_factory is None:
+        await init_db()
+
+    assert async_session_factory is not None
+
+    async with async_session_factory() as session:
         try:
-            yield conn
+            yield session
         finally:
-            pass  # Return connection to pool (no-op for mock)
+            await session.close()
 
 
-# Module-level singleton used by MCP tools
-db_manager = DatabaseManager()
+async def get_session() -> AsyncSession:
+    """Acquire a standalone session for MCP tool execution outside HTTP deps."""
+    if async_session_factory is None:
+        await init_db()
+
+    assert async_session_factory is not None
+    return async_session_factory()

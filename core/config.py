@@ -2,11 +2,12 @@
 
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """NEUTRON MES AI Assistant — Phase 1 settings."""
+    """NEUTRON MES AI Assistant — Phase 2 settings."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -15,14 +16,17 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "NEUTRON MES AI Assistant"
-    app_version: str = "0.1.0"
+    app_version: str = "0.2.0"
     debug: bool = False
 
-    # Mock database bridge (F0.4) — replace with real DSN in production
-    db_host: str = "localhost"
-    db_port: int = 5432
-    db_name: str = "mes_db"
-    db_user: str = "mes_readonly"
+    # Async PostgreSQL DSN — override via DATABASE_URL in .env for production
+    database_url: str = Field(
+        default=(
+            "postgresql+asyncpg://mes_readonly:YOUR_PASSWORD@"
+            "your-db-host:5432/mes_db"
+        ),
+        validation_alias="DATABASE_URL",
+    )
     db_pool_size: int = 5
 
     # Default workshop when no RBAC header is supplied (dev only)

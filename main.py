@@ -12,7 +12,7 @@ from fastapi import FastAPI
 
 from api.routes import router
 from core.config import get_settings
-from core.db import db_manager
+from core.db import close_db, init_db
 from core.logging import setup_logging
 from core.security import RBACMiddleware
 
@@ -20,9 +20,9 @@ from core.security import RBACMiddleware
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     setup_logging()
-    await db_manager.initialize()
+    await init_db()
     yield
-    await db_manager.shutdown()
+    await close_db()
 
 
 def create_app() -> FastAPI:

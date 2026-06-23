@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from core.db import db_manager
 from core.logging import get_logger
 from mcp_tools.base import BaseMCPTool
 from models.schemas import MCPContext, ProductionDataParams, ProductionDataResult, TimeFrame
@@ -44,20 +43,6 @@ class ProductionDataTool(BaseMCPTool[ProductionDataParams, ProductionDataResult]
         time_frame = (params.time_frame or TimeFrame.DAY).value
         line_id = params.line_id or "L-01"
         model_code = params.model_code or "MDL-UNKNOWN"
-
-        # Simulate DB bridge usage — named query stub, not LLM SQL
-        async with db_manager.acquire() as conn:
-            await conn.execute(
-                "agg_production_yield",
-                {
-                    "workshop_id": workshop_id,
-                    "line_id": line_id,
-                    "model_code": model_code,
-                    "start_date": str(period_start),
-                    "end_date": str(period_end),
-                    "time_frame": time_frame,
-                },
-            )
 
         return self._build_mock_aggregate(
             workshop_id=workshop_id,
