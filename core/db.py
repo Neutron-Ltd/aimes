@@ -47,7 +47,15 @@ async def init_db() -> None:
     if engine is not None:
         return
 
-    engine = _build_engine()
+    try:
+        engine = _build_engine()
+    except ValueError as exc:
+        logger.error(
+            "Invalid DATABASE_URL — check .env (port must be numeric, not a placeholder): %s",
+            exc,
+        )
+        return
+
     async_session_factory = async_sessionmaker(
         engine,
         class_=AsyncSession,

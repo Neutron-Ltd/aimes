@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     # Default workshop when no RBAC header is supplied (dev only)
     default_workshop_id: str = "WS-001"
 
+    # Alibaba Cloud Bailian (DashScope) — Intent Router (Feature 1.2)
+    dashscope_api_key: str = Field(default="", validation_alias="DASHSCOPE_API_KEY")
+    bailian_app_id: str = Field(default="", validation_alias="BAILIAN_APP_ID")
+
 
 @lru_cache
 def get_settings() -> Settings:

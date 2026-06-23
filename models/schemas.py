@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 from enum import Enum
 from typing import Any, Optional
 
@@ -20,9 +20,11 @@ class TimeFrame(str, Enum):
 
 
 class IntentType(str, Enum):
-    """Known intents the orchestrator can route to MCP tools."""
+    """Routing paths for Phase 2 production MCP tools."""
 
-    PRODUCTION_DATA = "production_data"
+    YIELD_AGGREGATION = "yield_aggregation"
+    YIELD_ANOMALIES = "yield_anomalies"
+    YIELD_COMPARISON = "yield_comparison"
     UNKNOWN = "unknown"
 
 
@@ -40,8 +42,45 @@ class IntentSchema(BaseModel):
     time_frame: Optional[TimeFrame] = None
     model_code: Optional[str] = None
     line_id: Optional[str] = None
+    yield_type: str = Field(
+        default="equipment",
+        description="equipment or reported — defaults to equipment unless stated",
+    )
+    group_by: Optional[str] = Field(
+        default=None, description="daily | hourly | total (aggregation intent)"
+    )
+    metric: Optional[str] = Field(
+        default=None, description="sum | average | achievement_rate (aggregation intent)"
+    )
+    analysis_type: Optional[str] = Field(
+        default=None,
+        description="volatility | below_standard | peak_hourly (anomalies intent)",
+    )
+    threshold_percentage: Optional[float] = None
+    period_1_start: Optional[date] = None
+    period_1_end: Optional[date] = None
+    period_2_start: Optional[date] = None
+    period_2_end: Optional[date] = None
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     raw_query: str = ""
+
+
+class BailianIntentExtraction(BaseModel):
+    """Strict schema for raw Bailian JSON before mapping to IntentSchema."""
+
+    intent: str
+    yield_type: str = "equipment"
+    line_id: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    group_by: Optional[str] = None
+    metric: Optional[str] = None
+    analysis_type: Optional[str] = None
+    threshold_percentage: Optional[float] = None
+    period_1_start: Optional[str] = None
+    period_1_end: Optional[str] = None
+    period_2_start: Optional[str] = None
+    period_2_end: Optional[str] = None
 
 
 class MCPContext(BaseModel):
@@ -54,34 +93,6 @@ class MCPContext(BaseModel):
     workshop_id: str
     user_id: Optional[str] = None
     permission_level: str = "operator"
-
-
-class ProductionDataParams(BaseModel):
-    """Input parameters for the Production Data MCP tool."""
-
-    start_date: Optional[date] = None
-    end_date: Optional[date] = None
-    time_frame: Optional[TimeFrame] = None
-    model_code: Optional[str] = None
-    line_id: Optional[str] = None
-    workshop_id: str
-
-
-class ProductionDataResult(BaseModel):
-    """Aggregated production metrics returned by the Production Data MCP tool."""
-
-    workshop_id: str
-    line_id: Optional[str] = None
-    model_code: Optional[str] = None
-    period_start: Optional[date] = None
-    period_end: Optional[date] = None
-    time_frame: Optional[str] = None
-    total_reported: int = 0
-    total_equipment: int = 0
-    yield_rate: float = Field(description="Equipment yield as a percentage (0–100)")
-    defect_count: int = 0
-    aggregated_at: datetime = Field(default_factory=datetime.utcnow)
-    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class OrchestratorRequest(BaseModel):

@@ -1,7 +1,6 @@
 """Model Context Protocol tool definitions for MES data access."""
 
 from mcp_tools.base import BaseMCPTool, MCPToolResult
-from mcp_tools.production_data import ProductionDataTool
 from mcp_tools.production_tools import (
     CompareYieldPeriodsTool,
     GetYieldAggregationTool,
@@ -14,7 +13,6 @@ from mcp_tools.production_tools import (
 __all__ = [
     "BaseMCPTool",
     "MCPToolResult",
-    "ProductionDataTool",
     "GetYieldAggregationTool",
     "GetYieldAnomaliesAndPeaksTool",
     "CompareYieldPeriodsTool",
