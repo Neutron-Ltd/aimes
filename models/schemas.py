@@ -117,7 +117,9 @@ class BailianIntentExtraction(BaseModel):
 
 
 class MCPContext(BaseModel):
-    workshop_id: str
+    """Request context placeholder — no workshop scoping is applied to queries."""
+
+    workshop_id: Optional[str] = None
     user_id: Optional[str] = None
     permission_level: str = "operator"
 

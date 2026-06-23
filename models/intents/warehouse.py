@@ -13,7 +13,6 @@ class InventoryStatusParams(BaseModel):
 
 
 class InventoryStatusResult(BaseModel):
-    workshop_id: str
     low_stock: list[dict[str, Any]] = Field(default_factory=list)
     expiring: list[dict[str, Any]] = Field(default_factory=list)
 
@@ -25,7 +24,6 @@ class InboundOutboundParams(BaseModel):
 
 
 class InboundOutboundResult(BaseModel):
-    workshop_id: str
     recommended_bay: Optional[str] = None
     fifo_lots: list[dict[str, Any]] = Field(default_factory=list)
 
@@ -36,7 +34,6 @@ class ObsoleteProfileParams(BaseModel):
 
 
 class ObsoleteProfileResult(BaseModel):
-    workshop_id: str
     stagnant_items: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -45,7 +42,6 @@ class TraceForwardParams(BaseModel):
 
 
 class TraceForwardResult(BaseModel):
-    workshop_id: str
     chain: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -54,5 +50,4 @@ class TraceReverseParams(BaseModel):
 
 
 class TraceReverseResult(BaseModel):
-    workshop_id: str
     chain: list[dict[str, Any]] = Field(default_factory=list)

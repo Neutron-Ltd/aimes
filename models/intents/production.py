@@ -18,7 +18,6 @@ class ProductYieldParams(BaseModel):
 class ProductYieldResult(BaseModel):
     line_id: str
     product_code: str
-    workshop_id: str
     total_qty: float
     breakdown: list[dict[str, Any]] = Field(default_factory=list)
 
@@ -31,7 +30,6 @@ class DeviceRateParams(BaseModel):
 
 
 class DeviceRateResult(BaseModel):
-    workshop_id: str
     devices: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -45,7 +43,6 @@ class StandardTimeAchievementParams(BaseModel):
 class StandardTimeAchievementResult(BaseModel):
     line_id: str
     model_code: str
-    workshop_id: str
     achievement_pct: float
     actual_qty: float
     standard_time: float
@@ -61,7 +58,6 @@ class RootCauseParams(BaseModel):
 
 class RootCauseResult(BaseModel):
     line_id: str
-    workshop_id: str
     probable_causes: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -72,7 +68,6 @@ class SchedulingParams(BaseModel):
 
 class SchedulingResult(BaseModel):
     line_id: str
-    workshop_id: str
     adjusted_schedule: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -83,7 +78,6 @@ class CapacityForecastParams(BaseModel):
 
 class CapacityForecastResult(BaseModel):
     line_id: str
-    workshop_id: str
     capacity_utilization: float
     overtime_hours_estimate: float
     personnel_gap: int

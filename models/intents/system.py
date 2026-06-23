@@ -13,6 +13,5 @@ class CrossModuleParams(BaseModel):
 
 
 class CrossModuleResult(BaseModel):
-    workshop_id: str
     modules: dict[str, Any] = Field(default_factory=dict)
     summary: str = ""

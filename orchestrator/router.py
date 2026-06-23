@@ -59,15 +59,14 @@ async def route_and_execute(
 ) -> OrchestratorResponse:
     intent = await parse_intent(query, context)
     logger.info(
-        "Parsed intent=%s line=%s workshop=%s",
+        "Parsed intent=%s line=%s",
         intent.intent,
         intent.line_id,
-        context.workshop_id,
     )
 
     metadata: dict = {}
     if enrich_response and intent.intent in RAG_INTENTS:
-        rag_context = await retrieve_context(query, context.workshop_id, top_k=5)
+        rag_context = await retrieve_context(query, top_k=5)
         if rag_context:
             metadata["rag_context"] = rag_context
 

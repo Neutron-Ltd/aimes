@@ -16,7 +16,6 @@ class DefectAggregationParams(BaseModel):
 
 
 class DefectAggregationResult(BaseModel):
-    workshop_id: str
     defect_rate: float
     total_inspected: int
     total_defects: int
@@ -31,7 +30,6 @@ class QualityRootCauseParams(BaseModel):
 
 
 class QualityRootCauseResult(BaseModel):
-    workshop_id: str
     hypotheses: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -41,7 +39,6 @@ class ErrorPreventionParams(BaseModel):
 
 
 class ErrorPreventionResult(BaseModel):
-    workshop_id: str
     process_code: str
     omissions: list[str] = Field(default_factory=list)
     checklist_items: list[dict[str, Any]] = Field(default_factory=list)
@@ -54,7 +51,6 @@ class EffectivenessVerifyParams(BaseModel):
 
 
 class EffectivenessVerifyResult(BaseModel):
-    workshop_id: str
     before_defect_rate: float
     after_defect_rate: float
     growth_rate: Optional[float] = None

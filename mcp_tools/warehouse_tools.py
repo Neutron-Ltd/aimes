@@ -33,8 +33,8 @@ class GetInventoryStatusTool(BaseMCPTool[InventoryStatusParams, InventoryStatusR
     ) -> InventoryStatusResult:
         session = await get_session()
         try:
-            filters = ["s.data_auth = :workshop_id"]
-            bind: dict[str, Any] = {"workshop_id": context.workshop_id}
+            filters: list[str] = []
+            bind: dict[str, Any] = {}
             if params.wh_code:
                 filters.append("s.wh_code = :wh_code")
                 bind["wh_code"] = params.wh_code
@@ -42,13 +42,14 @@ class GetInventoryStatusTool(BaseMCPTool[InventoryStatusParams, InventoryStatusR
                 filters.append("s.item_code = :item_code")
                 bind["item_code"] = params.item_code
 
+            where = f"WHERE {' AND '.join(filters)}" if filters else ""
             sql = text(
                 f"""
                 SELECT s.item_code, s.item_qty, s.wh_code, s.invalid_date,
                        ci.min_stock
                 FROM n2admin.t_wms_stock_info s
                 LEFT JOIN n2admin.t_co_item ci ON s.item_code = ci.item_code
-                WHERE {" AND ".join(filters)}
+                {where}
                 """
             )
             result = await session.execute(sql, bind)
@@ -82,7 +83,6 @@ class GetInventoryStatusTool(BaseMCPTool[InventoryStatusParams, InventoryStatusR
                 )
 
         return InventoryStatusResult(
-            workshop_id=context.workshop_id,
             low_stock=low_stock,
             expiring=expiring,
         )
@@ -101,7 +101,6 @@ class GuideInboundOutboundTool(BaseMCPTool[InboundOutboundParams, InboundOutboun
                 """
                 SELECT area_sn, area_name
                 FROM n2admin.t_wms_area
-                WHERE data_auth = :workshop_id
                 LIMIT 1
                 """
             )
@@ -110,16 +109,15 @@ class GuideInboundOutboundTool(BaseMCPTool[InboundOutboundParams, InboundOutboun
                 SELECT item_lot, item_qty, instock_time
                 FROM n2admin.t_wms_stock_info
                 WHERE wh_code = :wh_code AND item_code = :item_code
-                  AND data_auth = :workshop_id AND item_qty > 0
+                  AND item_qty > 0
                 ORDER BY instock_time ASC
                 """
             )
             bind = {
                 "wh_code": params.wh_code,
                 "item_code": params.item_code,
-                "workshop_id": context.workshop_id,
             }
-            area = (await session.execute(area_sql, {"workshop_id": context.workshop_id})).mappings().first()
+            area = (await session.execute(area_sql)).mappings().first()
             lots = [dict(r) for r in (await session.execute(stock_sql, bind)).mappings().all()]
         finally:
             await session.close()
@@ -133,7 +131,6 @@ class GuideInboundOutboundTool(BaseMCPTool[InboundOutboundParams, InboundOutboun
             key=lambda x: x.get("instock_time") or datetime.min,
         )
         return InboundOutboundResult(
-            workshop_id=context.workshop_id,
             recommended_bay=recommended,
             fifo_lots=[
                 {
@@ -148,15 +145,15 @@ class GuideInboundOutboundTool(BaseMCPTool[InboundOutboundParams, InboundOutboun
 
 class ProfileObsoleteInventoryTool(BaseMCPTool[ObsoleteProfileParams, ObsoleteProfileResult]):
     name = "profile_obsolete_inventory"
-    description = "Stagnant stock profile using dull_cycle from t_co_item."
+    description = "Stagnant stock profile using dull_cycle from t_co_item."""
 
     async def execute(
         self, params: ObsoleteProfileParams, context: MCPContext
     ) -> ObsoleteProfileResult:
         session = await get_session()
         try:
-            filters = ["s.data_auth = :workshop_id", "s.item_qty > 0"]
-            bind: dict[str, Any] = {"workshop_id": context.workshop_id}
+            filters = ["s.item_qty > 0"]
+            bind: dict[str, Any] = {}
             if params.wh_code:
                 filters.append("s.wh_code = :wh_code")
                 bind["wh_code"] = params.wh_code
@@ -191,7 +188,7 @@ class ProfileObsoleteInventoryTool(BaseMCPTool[ObsoleteProfileParams, ObsoletePr
                     }
                 )
 
-        return ObsoleteProfileResult(workshop_id=context.workshop_id, stagnant_items=stagnant)
+        return ObsoleteProfileResult(stagnant_items=stagnant)
 
 
 class TraceMaterialForwardTool(BaseMCPTool[TraceForwardParams, TraceForwardResult]):
@@ -203,13 +200,11 @@ class TraceMaterialForwardTool(BaseMCPTool[TraceForwardParams, TraceForwardResul
     ) -> TraceForwardResult:
         session = await get_session()
         try:
-            # Hop 1: WMS mid item by material lot
             sql = text(
                 """
                 SELECT m.item_code, m.item_lot, m.item_sn
                 FROM n2admin.t_wms_mid_item m
                 WHERE m.item_lot = :material_batch
-                  AND m.data_auth = :workshop_id
                 LIMIT 20
                 """
             )
@@ -218,23 +213,18 @@ class TraceMaterialForwardTool(BaseMCPTool[TraceForwardParams, TraceForwardResul
                 for r in (
                     await session.execute(
                         sql,
-                        {
-                            "material_batch": params.material_batch,
-                            "workshop_id": context.workshop_id,
-                        },
+                        {"material_batch": params.material_batch},
                     )
                 ).mappings().all()
             ]
 
-            # Hop 2: WIP detail by pro_lot / item linkage
             wip_sql = text(
                 """
                 SELECT wd.pro_lot, wd.model_code, wd.pro_qty
                 FROM n2admin.t_wip_detail wd
-                WHERE wd.data_auth = :workshop_id
-                  AND wd.pro_lot IN (
+                WHERE wd.pro_lot IN (
                       SELECT DISTINCT item_lot FROM n2admin.t_wms_mid_item
-                      WHERE item_lot = :material_batch AND data_auth = :workshop_id
+                      WHERE item_lot = :material_batch
                   )
                 LIMIT 20
                 """
@@ -244,10 +234,7 @@ class TraceMaterialForwardTool(BaseMCPTool[TraceForwardParams, TraceForwardResul
                 for r in (
                     await session.execute(
                         wip_sql,
-                        {
-                            "material_batch": params.material_batch,
-                            "workshop_id": context.workshop_id,
-                        },
+                        {"material_batch": params.material_batch},
                     )
                 ).mappings().all()
             ]
@@ -258,7 +245,7 @@ class TraceMaterialForwardTool(BaseMCPTool[TraceForwardParams, TraceForwardResul
         if wip_rows:
             chain.append({"hop": 2, "source": "t_wip_detail", "records": wip_rows})
 
-        return TraceForwardResult(workshop_id=context.workshop_id, chain=chain)
+        return TraceForwardResult(chain=chain)
 
 
 class TraceProductReverseTool(BaseMCPTool[TraceReverseParams, TraceReverseResult]):
@@ -275,7 +262,6 @@ class TraceProductReverseTool(BaseMCPTool[TraceReverseParams, TraceReverseResult
                 SELECT wd.pro_lot, wd.model_code, wd.pro_qty
                 FROM n2admin.t_wip_detail wd
                 WHERE wd.pro_lot = :finished_lot
-                  AND wd.data_auth = :workshop_id
                 LIMIT 10
                 """
             )
@@ -284,10 +270,7 @@ class TraceProductReverseTool(BaseMCPTool[TraceReverseParams, TraceReverseResult
                 for r in (
                     await session.execute(
                         wip_sql,
-                        {
-                            "finished_lot": params.finished_lot,
-                            "workshop_id": context.workshop_id,
-                        },
+                        {"finished_lot": params.finished_lot},
                     )
                 ).mappings().all()
             ]
@@ -296,10 +279,9 @@ class TraceProductReverseTool(BaseMCPTool[TraceReverseParams, TraceReverseResult
                 """
                 SELECT m.item_code, m.item_lot, m.supplier_code
                 FROM n2admin.t_wms_mid_item m
-                WHERE m.data_auth = :workshop_id
-                  AND m.item_lot IN (
+                WHERE m.item_lot IN (
                       SELECT pro_lot FROM n2admin.t_wip_detail
-                      WHERE pro_lot = :finished_lot AND data_auth = :workshop_id
+                      WHERE pro_lot = :finished_lot
                   )
                 LIMIT 20
                 """
@@ -309,10 +291,7 @@ class TraceProductReverseTool(BaseMCPTool[TraceReverseParams, TraceReverseResult
                 for r in (
                     await session.execute(
                         mid_sql,
-                        {
-                            "finished_lot": params.finished_lot,
-                            "workshop_id": context.workshop_id,
-                        },
+                        {"finished_lot": params.finished_lot},
                     )
                 ).mappings().all()
             ]
@@ -323,7 +302,7 @@ class TraceProductReverseTool(BaseMCPTool[TraceReverseParams, TraceReverseResult
         if mid_rows:
             chain.append({"hop": 2, "source": "t_wms_mid_item", "records": mid_rows})
 
-        return TraceReverseResult(workshop_id=context.workshop_id, chain=chain)
+        return TraceReverseResult(chain=chain)
 
 
 get_inventory_status_tool = GetInventoryStatusTool()

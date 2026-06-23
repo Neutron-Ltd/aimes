@@ -56,6 +56,5 @@ Warehouse intents: WAREHOUSE_INVENTORY_MONITOR, WAREHOUSE_INBOUND_OUTBOUND,
   WAREHOUSE_OBSOLETE_PROFILE, WAREHOUSE_TRACE_FORWARD, WAREHOUSE_TRACE_REVERSE
 System intents: EXPORT_REPORT, CROSS_MODULE_ANALYSIS, UNKNOWN
 Current datetime: {now}
-Workshop context (reference only — do NOT include in JSON): {context.workshop_id}
 User Query: {query}
 """

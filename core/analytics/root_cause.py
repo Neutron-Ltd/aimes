@@ -11,7 +11,7 @@ from core.db import get_session
 from models.intents.production import RootCauseParams
 
 
-async def analyze_root_cause(params: RootCauseParams, workshop_id: str) -> list[dict[str, Any]]:
+async def analyze_root_cause(params: RootCauseParams) -> list[dict[str, Any]]:
     session = await get_session()
     try:
         sql = text(
@@ -26,12 +26,10 @@ async def analyze_root_cause(params: RootCauseParams, workshop_id: str) -> list[
             LEFT JOIN n2admin.t_smt_program_consumption_record eq
               ON eq.device_sn IN (
                   SELECT device_sn FROM n2admin.t_co_device
-                  WHERE cd_location = :line_id AND data_auth = :workshop_id
+                  WHERE cd_location = :line_id
               )
              AND eq.create_time BETWEEN :start_date AND :end_date
-             AND eq.data_auth = :workshop_id
             WHERE line.area_sn = :line_id
-              AND wd.data_auth = :workshop_id
               AND COALESCE(wd.in_time, wd.create_time) BETWEEN :start_date AND :end_date
             GROUP BY wd.pro_lot, wd.operator, eq.device_sn, bucket
             ORDER BY bucket
@@ -41,7 +39,6 @@ async def analyze_root_cause(params: RootCauseParams, workshop_id: str) -> list[
             sql,
             {
                 "line_id": params.line_id,
-                "workshop_id": workshop_id,
                 "start_date": params.start_date,
                 "end_date": params.end_date,
             },

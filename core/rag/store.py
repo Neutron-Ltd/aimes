@@ -27,7 +27,6 @@ class VectorStore(ABC):
         embedding: list[float],
         doc_type: str,
         metadata: dict[str, Any],
-        workshop_id: str,
     ) -> str:
         ...
 
@@ -35,7 +34,6 @@ class VectorStore(ABC):
     async def search(
         self,
         embedding: list[float],
-        workshop_id: str,
         doc_types: Optional[list[str]] = None,
         top_k: int = 5,
     ) -> list[dict[str, Any]]:
@@ -74,7 +72,6 @@ class FileVectorStore(VectorStore):
         embedding: list[float],
         doc_type: str,
         metadata: dict[str, Any],
-        workshop_id: str,
     ) -> str:
         chunk_id = str(uuid.uuid4())
         records = self._load()
@@ -85,7 +82,6 @@ class FileVectorStore(VectorStore):
                 "embedding": embedding,
                 "doc_type": doc_type,
                 "metadata": metadata,
-                "data_auth": workshop_id,
             }
         )
         self._save(records)
@@ -94,15 +90,12 @@ class FileVectorStore(VectorStore):
     async def search(
         self,
         embedding: list[float],
-        workshop_id: str,
         doc_types: Optional[list[str]] = None,
         top_k: int = 5,
     ) -> list[dict[str, Any]]:
         records = self._load()
         scored: list[tuple[float, dict[str, Any]]] = []
         for rec in records:
-            if rec.get("data_auth") != workshop_id:
-                continue
             if doc_types and rec.get("doc_type") not in doc_types:
                 continue
             sim = _cosine_similarity(embedding, rec.get("embedding", []))
@@ -138,10 +131,9 @@ class ChromaVectorStore(VectorStore):
         embedding: list[float],
         doc_type: str,
         metadata: dict[str, Any],
-        workshop_id: str,
     ) -> str:
         chunk_id = str(uuid.uuid4())
-        meta = {**metadata, "doc_type": doc_type, "data_auth": workshop_id}
+        meta = {**metadata, "doc_type": doc_type}
         self._collection.upsert(
             ids=[chunk_id],
             embeddings=[embedding],
@@ -153,19 +145,21 @@ class ChromaVectorStore(VectorStore):
     async def search(
         self,
         embedding: list[float],
-        workshop_id: str,
         doc_types: Optional[list[str]] = None,
         top_k: int = 5,
     ) -> list[dict[str, Any]]:
-        where: dict[str, Any] = {"data_auth": workshop_id}
+        where: Optional[dict[str, Any]] = None
         if doc_types:
-            where = {"$and": [{"data_auth": workshop_id}, {"doc_type": {"$in": doc_types}}]}
+            where = {"doc_type": {"$in": doc_types}}
 
-        results = self._collection.query(
-            query_embeddings=[embedding],
-            n_results=top_k,
-            where=where,
-        )
+        kwargs: dict[str, Any] = {
+            "query_embeddings": [embedding],
+            "n_results": top_k,
+        }
+        if where:
+            kwargs["where"] = where
+
+        results = self._collection.query(**kwargs)
         chunks: list[dict[str, Any]] = []
         if not results.get("documents"):
             return chunks
@@ -211,7 +205,6 @@ class PgVectorStore(VectorStore):
         embedding: list[float],
         doc_type: str,
         metadata: dict[str, Any],
-        workshop_id: str,
     ) -> str:
         from sqlalchemy import text
 
@@ -240,7 +233,7 @@ class PgVectorStore(VectorStore):
                     "content": content,
                     "metadata": json.dumps(metadata),
                     "embedding": emb_literal,
-                    "data_auth": workshop_id,
+                    "data_auth": "",
                 },
             )
             await session.commit()
@@ -251,7 +244,6 @@ class PgVectorStore(VectorStore):
     async def search(
         self,
         embedding: list[float],
-        workshop_id: str,
         doc_types: Optional[list[str]] = None,
         top_k: int = 5,
     ) -> list[dict[str, Any]]:
@@ -266,18 +258,17 @@ class PgVectorStore(VectorStore):
         type_filter = ""
         params: dict[str, Any] = {
             "embedding": emb_literal,
-            "workshop_id": workshop_id,
             "top_k": top_k,
         }
         if doc_types:
-            type_filter = "AND doc_type = ANY(:doc_types)"
+            type_filter = "WHERE doc_type = ANY(:doc_types)"
             params["doc_types"] = doc_types
 
         sql = f"""
             SELECT content, metadata,
                    embedding <=> CAST(:embedding AS vector) AS distance
             FROM n2admin.ai_knowledge_chunks
-            WHERE data_auth = :workshop_id {type_filter}
+            {type_filter}
             ORDER BY embedding <=> CAST(:embedding AS vector)
             LIMIT :top_k
         """

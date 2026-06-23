@@ -65,7 +65,6 @@ async def query_voice(
     summary="Ingest SOP/anomaly/solution document into RAG vector store",
 )
 async def rag_ingest(body: RagIngestRequest, request: Request) -> RagIngestResponse:
-    context: MCPContext = get_mes_context(request)
     if body.doc_type not in ("sop", "anomaly", "solution"):
         return RagIngestResponse(
             success=False,
@@ -73,7 +72,7 @@ async def rag_ingest(body: RagIngestRequest, request: Request) -> RagIngestRespo
             message="doc_type must be sop, anomaly, or solution",
         )
     success, chunk_id, backend = await ingest_document(
-        body.doc_type, body.text, body.metadata, context.workshop_id
+        body.doc_type, body.text, body.metadata
     )
     return RagIngestResponse(
         success=success,

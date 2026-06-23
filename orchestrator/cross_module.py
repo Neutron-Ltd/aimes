@@ -73,7 +73,6 @@ async def run_cross_module_analysis(
         summary_parts.append(f"Warehouse: {low} low-stock items.")
 
     return CrossModuleResult(
-        workshop_id=context.workshop_id,
         modules=modules,
         summary=" ".join(summary_parts) or "Cross-module analysis completed.",
     )

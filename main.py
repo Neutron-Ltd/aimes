@@ -42,7 +42,7 @@ def create_app() -> FastAPI:
         redoc_url="/redoc",
     )
 
-    # Feature 13.1 — inject workshop_id / permission context on every request
+    # Request context middleware (no workshop scoping)
     app.add_middleware(RBACMiddleware)
 
     app.include_router(router)

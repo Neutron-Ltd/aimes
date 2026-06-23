@@ -10,7 +10,7 @@ from core.db import get_session
 from models.intents.production import CapacityForecastParams
 
 
-async def forecast_capacity(params: CapacityForecastParams, workshop_id: str) -> dict[str, float | int]:
+async def forecast_capacity(params: CapacityForecastParams) -> dict[str, float | int]:
     session = await get_session()
     try:
         end = datetime.now()
@@ -20,8 +20,10 @@ async def forecast_capacity(params: CapacityForecastParams, workshop_id: str) ->
             SELECT SUM(COALESCE(eq.finish_qty, 0)) AS total_qty,
                    COUNT(DISTINCT date_trunc('day', eq.create_time)) AS active_days
             FROM n2admin.t_smt_program_consumption_record eq
-            WHERE eq.area_sn = :line_id
-              AND eq.data_auth = :workshop_id
+            WHERE eq.device_sn IN (
+                SELECT device_sn FROM n2admin.t_co_device
+                WHERE cd_location = :line_id
+            )
               AND eq.create_time BETWEEN :start_date AND :end_date
             """
         )
@@ -29,7 +31,6 @@ async def forecast_capacity(params: CapacityForecastParams, workshop_id: str) ->
             sql,
             {
                 "line_id": params.line_id,
-                "workshop_id": workshop_id,
                 "start_date": start,
                 "end_date": end,
             },

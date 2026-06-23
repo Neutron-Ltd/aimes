@@ -22,10 +22,9 @@ class GetProductionRootCauseTool(BaseMCPTool[RootCauseParams, RootCauseResult]):
     description = "Rank probable root causes for production yield dips."
 
     async def execute(self, params: RootCauseParams, context: MCPContext) -> RootCauseResult:
-        causes = await analyze_root_cause(params, context.workshop_id)
+        causes = await analyze_root_cause(params)
         return RootCauseResult(
             line_id=params.line_id,
-            workshop_id=context.workshop_id,
             probable_causes=causes,
         )
 
@@ -35,10 +34,9 @@ class OptimizeProductionScheduleTool(BaseMCPTool[SchedulingParams, SchedulingRes
     description = "Heuristic schedule optimization with priority scores."
 
     async def execute(self, params: SchedulingParams, context: MCPContext) -> SchedulingResult:
-        schedule = await optimize_schedule(params, context.workshop_id)
+        schedule = await optimize_schedule(params)
         return SchedulingResult(
             line_id=params.line_id,
-            workshop_id=context.workshop_id,
             adjusted_schedule=schedule,
         )
 
@@ -50,10 +48,9 @@ class ForecastCapacityHrTool(BaseMCPTool[CapacityForecastParams, CapacityForecas
     async def execute(
         self, params: CapacityForecastParams, context: MCPContext
     ) -> CapacityForecastResult:
-        forecast = await forecast_capacity(params, context.workshop_id)
+        forecast = await forecast_capacity(params)
         return CapacityForecastResult(
             line_id=params.line_id,
-            workshop_id=context.workshop_id,
             capacity_utilization=float(forecast["capacity_utilization"]),
             overtime_hours_estimate=float(forecast["overtime_hours_estimate"]),
             personnel_gap=int(forecast["personnel_gap"]),

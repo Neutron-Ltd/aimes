@@ -10,7 +10,6 @@ from core.rag.store import get_chroma_fallback, get_vector_store
 
 async def retrieve_context(
     query: str,
-    workshop_id: str,
     doc_types: Optional[list[str]] = None,
     top_k: int = 5,
 ) -> str:
@@ -18,9 +17,9 @@ async def retrieve_context(
     embedding = await embed_text(query)
     store = get_vector_store()
     try:
-        chunks = await store.search(embedding, workshop_id, doc_types, top_k)
+        chunks = await store.search(embedding, doc_types, top_k)
     except Exception:
-        chunks = await get_chroma_fallback().search(embedding, workshop_id, doc_types, top_k)
+        chunks = await get_chroma_fallback().search(embedding, doc_types, top_k)
 
     if not chunks:
         return ""

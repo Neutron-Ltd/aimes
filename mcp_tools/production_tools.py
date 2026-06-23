@@ -77,7 +77,6 @@ class YieldAggregationResult(BaseModel):
     group_by: str
     value: float
     breakdown: list[dict[str, Any]] = Field(default_factory=list)
-    workshop_id: str
 
 
 class YieldAnomaliesParams(BaseModel):
@@ -95,7 +94,6 @@ class YieldAnomaliesResult(BaseModel):
     line_id: Optional[str] = None
     device_sn: Optional[str] = None
     analysis_type: str
-    workshop_id: str
     result: dict[str, Any]
 
 
@@ -113,7 +111,6 @@ class CompareYieldPeriodsResult(BaseModel):
     yield_type: str
     line_id: Optional[str] = None
     device_sn: Optional[str] = None
-    workshop_id: str
     period_1_total: float
     period_2_total: float
     growth_rate: Optional[float] = None
@@ -154,7 +151,6 @@ def _equipment_scope_filter(line_id: Optional[str], device_sn: Optional[str]) ->
         return """eq.device_sn IN (
             SELECT device_sn FROM n2admin.t_co_device
             WHERE cd_location = :line_id
-              AND data_auth = :workshop_id
         )"""
     return "1=0"
 
@@ -167,12 +163,6 @@ def _line_filter(
     if yield_type == YieldType.EQUIPMENT:
         return _equipment_scope_filter(line_id, device_sn)
     return "line.area_sn = :line_id"
-
-
-def _rbac_filter(yield_type: YieldType) -> str:
-    if yield_type == YieldType.EQUIPMENT:
-        return "eq.data_auth = :workshop_id"
-    return "wd.data_auth = :workshop_id"
 
 
 def _time_column(yield_type: YieldType) -> str:
@@ -195,7 +185,6 @@ def _build_aggregation_sql(
     from_clause = build_yield_from_clause(yield_type)
     time_col = _time_column(yield_type)
     scope_filter = _line_filter(yield_type, line_id=line_id, device_sn=device_sn)
-    rbac_filter = _rbac_filter(yield_type)
 
     if yield_type == YieldType.EQUIPMENT:
         qty_expr = "COALESCE(eq.finish_qty, 0)"
@@ -224,7 +213,6 @@ def _build_aggregation_sql(
             SELECT {select_cols}
             FROM {from_clause}
             WHERE {scope_filter}
-              AND {rbac_filter}
               AND {time_range}
         """
 
@@ -248,7 +236,6 @@ def _build_aggregation_sql(
         SELECT {select_cols}
         FROM {from_clause}
         WHERE {scope_filter}
-          AND {rbac_filter}
           AND {time_range}
         GROUP BY {bucket}
         ORDER BY {bucket}
@@ -261,7 +248,6 @@ async def _fetch_aggregation_rows(
     yield_type: YieldType,
     line_id: Optional[str],
     device_sn: Optional[str],
-    workshop_id: str,
     start_date: datetime,
     end_date: datetime,
     group_by: GroupBy,
@@ -272,7 +258,6 @@ async def _fetch_aggregation_rows(
         )
     )
     bind: dict[str, Any] = {
-        "workshop_id": workshop_id,
         "start_date": start_date,
         "end_date": end_date,
     }
@@ -354,7 +339,6 @@ async def _fetch_period_total(
     yield_type: YieldType,
     line_id: Optional[str],
     device_sn: Optional[str],
-    workshop_id: str,
     start_date: datetime,
     end_date: datetime,
 ) -> float:
@@ -363,7 +347,6 @@ async def _fetch_period_total(
         yield_type=yield_type,
         line_id=line_id,
         device_sn=device_sn,
-        workshop_id=workshop_id,
         start_date=start_date,
         end_date=end_date,
         group_by=GroupBy.TOTAL,
@@ -394,7 +377,6 @@ class GetYieldAggregationTool(BaseMCPTool[YieldAggregationParams, YieldAggregati
                 yield_type=params.yield_type,
                 line_id=params.line_id,
                 device_sn=params.device_sn,
-                workshop_id=context.workshop_id,
                 start_date=params.start_date,
                 end_date=params.end_date,
                 group_by=params.group_by,
@@ -410,7 +392,6 @@ class GetYieldAggregationTool(BaseMCPTool[YieldAggregationParams, YieldAggregati
                 group_by=params.group_by.value,
                 value=round(value, 4),
                 breakdown=breakdown,
-                workshop_id=context.workshop_id,
             )
         finally:
             await session.close()
@@ -441,7 +422,6 @@ class GetYieldAnomaliesAndPeaksTool(
                 yield_type=params.yield_type,
                 line_id=params.line_id,
                 device_sn=params.device_sn,
-                workshop_id=context.workshop_id,
                 start_date=params.start_date,
                 end_date=params.end_date,
                 group_by=GroupBy.HOURLY,
@@ -468,7 +448,6 @@ class GetYieldAnomaliesAndPeaksTool(
                     yield_type=params.yield_type,
                     line_id=params.line_id,
                     device_sn=params.device_sn,
-                    workshop_id=context.workshop_id,
                     start_date=params.start_date,
                     end_date=params.end_date,
                     group_by=GroupBy.HOURLY,
@@ -509,7 +488,6 @@ class GetYieldAnomaliesAndPeaksTool(
                 line_id=params.line_id,
                 device_sn=params.device_sn,
                 analysis_type=params.analysis_type.value,
-                workshop_id=context.workshop_id,
                 result=result,
             )
         finally:
@@ -539,7 +517,6 @@ class CompareYieldPeriodsTool(
                 yield_type=params.yield_type,
                 line_id=params.line_id,
                 device_sn=params.device_sn,
-                workshop_id=context.workshop_id,
                 start_date=params.period_1_start,
                 end_date=params.period_1_end,
             )
@@ -548,7 +525,6 @@ class CompareYieldPeriodsTool(
                 yield_type=params.yield_type,
                 line_id=params.line_id,
                 device_sn=params.device_sn,
-                workshop_id=context.workshop_id,
                 start_date=params.period_2_start,
                 end_date=params.period_2_end,
             )
@@ -560,7 +536,6 @@ class CompareYieldPeriodsTool(
                 yield_type=params.yield_type.value,
                 line_id=params.line_id,
                 device_sn=params.device_sn,
-                workshop_id=context.workshop_id,
                 period_1_total=round(period_1_total, 4),
                 period_2_total=round(period_2_total, 4),
                 growth_rate=round(growth, 4) if growth is not None else None,
@@ -595,7 +570,6 @@ class GetProductYieldTool(BaseMCPTool):
                 JOIN n2admin.t_co_item ci ON wd.model_code = ci.item_code
                 WHERE line.area_sn = :line_id
                   AND wd.model_code = :product_code
-                  AND wd.data_auth = :workshop_id
                   AND COALESCE(wd.in_time, wd.create_time)
                       BETWEEN :start_date AND :end_date
                 GROUP BY bucket, ci.item_name
@@ -607,7 +581,6 @@ class GetProductYieldTool(BaseMCPTool):
                 {
                     "line_id": params.line_id,
                     "product_code": params.product_code,
-                    "workshop_id": context.workshop_id,
                     "start_date": params.start_date,
                     "end_date": params.end_date,
                 },
@@ -625,7 +598,6 @@ class GetProductYieldTool(BaseMCPTool):
             return ProductYieldResult(
                 line_id=params.line_id,
                 product_code=params.product_code,
-                workshop_id=context.workshop_id,
                 total_qty=round(total, 4),
                 breakdown=breakdown,
             )
@@ -647,9 +619,8 @@ class GetDeviceProductionRateTool(BaseMCPTool):
 
         session = await get_session()
         try:
-            filters = ["eq.data_auth = :workshop_id", "eq.create_time BETWEEN :start_date AND :end_date"]
+            filters = ["eq.create_time BETWEEN :start_date AND :end_date"]
             bind: dict[str, Any] = {
-                "workshop_id": context.workshop_id,
                 "start_date": params.start_date,
                 "end_date": params.end_date,
             }
@@ -660,7 +631,7 @@ class GetDeviceProductionRateTool(BaseMCPTool):
                 filters.append(
                     """eq.device_sn IN (
                         SELECT device_sn FROM n2admin.t_co_device
-                        WHERE cd_location = :line_id AND data_auth = :workshop_id
+                        WHERE cd_location = :line_id
                     )"""
                 )
                 bind["line_id"] = params.line_id
@@ -688,7 +659,7 @@ class GetDeviceProductionRateTool(BaseMCPTool):
                 }
                 for r in result.mappings().all()
             ]
-            return DeviceRateResult(workshop_id=context.workshop_id, devices=devices)
+            return DeviceRateResult(devices=devices)
         finally:
             await session.close()
 
@@ -721,7 +692,6 @@ class GetStandardTimeAchievementTool(BaseMCPTool):
                   ON eq.area_sn = st.area_sn AND eq.model_code = st.model_code
                 WHERE eq.area_sn = :line_id
                   AND eq.model_code = :model_code
-                  AND eq.data_auth = :workshop_id
                   AND eq.create_time BETWEEN :start_date AND :end_date
                 """
             )
@@ -730,7 +700,6 @@ class GetStandardTimeAchievementTool(BaseMCPTool):
                 {
                     "line_id": params.line_id,
                     "model_code": params.model_code,
-                    "workshop_id": context.workshop_id,
                     "start_date": params.start_date,
                     "end_date": params.end_date,
                 },
@@ -744,7 +713,6 @@ class GetStandardTimeAchievementTool(BaseMCPTool):
             return StandardTimeAchievementResult(
                 line_id=params.line_id,
                 model_code=params.model_code,
-                workshop_id=context.workshop_id,
                 achievement_pct=round(achievement, 4),
                 actual_qty=round(actual, 4),
                 standard_time=round(std_time, 4),

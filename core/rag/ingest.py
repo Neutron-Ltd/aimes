@@ -74,7 +74,6 @@ async def ingest_document(
     doc_type: str,
     text: str,
     metadata: dict[str, Any],
-    workshop_id: str,
 ) -> tuple[bool, str, str]:
     """
     Chunk, embed, and upsert a document. Returns (success, chunk_id, backend).
@@ -89,11 +88,11 @@ async def ingest_document(
         embedding = await embed_text(chunk)
         chunk_meta = {**metadata, "chunk_index": i, "total_chunks": len(chunks)}
         try:
-            last_id = await store.upsert(chunk, embedding, doc_type, chunk_meta, workshop_id)
+            last_id = await store.upsert(chunk, embedding, doc_type, chunk_meta)
         except Exception as exc:
             logger.warning("Primary RAG store failed, falling back to Chroma: %s", exc)
             chroma = get_chroma_fallback()
-            last_id = await chroma.upsert(chunk, embedding, doc_type, chunk_meta, workshop_id)
+            last_id = await chroma.upsert(chunk, embedding, doc_type, chunk_meta)
             backend = "file"
 
     return True, last_id, backend

@@ -45,7 +45,7 @@ class BaseMCPTool(ABC, Generic[TParams, TResult]):
 
     @abstractmethod
     async def execute(self, params: TParams, context: MCPContext) -> TResult:
-        """Run the tool with validated parameters and RBAC context."""
+        """Run the tool with validated parameters."""
         ...
 
     async def run(self, params: TParams, context: MCPContext) -> MCPToolResult:
@@ -56,7 +56,7 @@ class BaseMCPTool(ABC, Generic[TParams, TResult]):
         """
         try:
             result = await self.execute(params, context)
-            logger.info("MCP tool '%s' completed for workshop=%s", self.name, context.workshop_id)
+            logger.info("MCP tool '%s' completed", self.name)
             return MCPToolResult(
                 tool_name=self.name,
                 success=True,
