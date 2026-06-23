@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime
 from typing import Any
 
 from sqlalchemy import text
@@ -17,7 +16,7 @@ async def analyze_root_cause(params: RootCauseParams, workshop_id: str) -> list[
     try:
         sql = text(
             """
-            SELECT wd.pro_lot, wd.create_user, eq.device_sn,
+            SELECT wd.pro_lot, wd.operator, eq.device_sn,
                    date_trunc('hour', COALESCE(wd.in_time, wd.create_time)) AS bucket,
                    SUM(COALESCE(wd.pro_qty, 0) - COALESCE(wd.ng_qty, 0)
                        - COALESCE(wd.scrap_qty, 0)) AS good_qty
@@ -25,12 +24,16 @@ async def analyze_root_cause(params: RootCauseParams, workshop_id: str) -> list[
             JOIN n2admin.t_co_area ws ON wd.work_stationsn = ws.area_sn
             JOIN n2admin.t_co_area line ON ws.parent_sn = line.area_sn
             LEFT JOIN n2admin.t_smt_program_consumption_record eq
-              ON eq.area_sn = line.area_sn
+              ON eq.device_sn IN (
+                  SELECT device_sn FROM n2admin.t_co_device
+                  WHERE cd_location = :line_id AND data_auth = :workshop_id
+              )
              AND eq.create_time BETWEEN :start_date AND :end_date
+             AND eq.data_auth = :workshop_id
             WHERE line.area_sn = :line_id
               AND wd.data_auth = :workshop_id
               AND COALESCE(wd.in_time, wd.create_time) BETWEEN :start_date AND :end_date
-            GROUP BY wd.pro_lot, wd.create_user, eq.device_sn, bucket
+            GROUP BY wd.pro_lot, wd.operator, eq.device_sn, bucket
             ORDER BY bucket
             """
         )
@@ -55,7 +58,7 @@ async def analyze_root_cause(params: RootCauseParams, workshop_id: str) -> list[
     dip_rows = [r for r in rows if float(r.get("good_qty") or 0) < mean_qty * 0.85]
 
     lot_counts = Counter(r.get("pro_lot") for r in dip_rows if r.get("pro_lot"))
-    user_counts = Counter(r.get("create_user") for r in dip_rows if r.get("create_user"))
+    user_counts = Counter(r.get("operator") for r in dip_rows if r.get("operator"))
     device_counts = Counter(r.get("device_sn") for r in dip_rows if r.get("device_sn"))
 
     causes: list[dict[str, Any]] = []

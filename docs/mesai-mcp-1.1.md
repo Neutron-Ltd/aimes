@@ -1,9 +1,20 @@
 # NEUTRON MES AI — MCP Debugging Report (v1.1)
 
-**Generated:** 2026-06-23 | **Backend version:** 0.3.0
+**Generated:** 2026-06-23 | **Last updated:** 2026-06-23 | **Backend version:** 0.3.0
 
 Full audit of all MCP tools, orchestration flow, verbatim SQL, and database schemas for external debugging.
 Companion test-data reference: [mesai-query-1.1.md](./mesai-query-1.1.md)
+
+### Recent application-layer fixes (2026-06-23)
+
+| Area | Change |
+|---|---|
+| Equipment yield tools | Scope via `t_co_device.cd_location` subquery or direct `device_sn`; no longer filter `eq.area_sn` |
+| Yield param validation | Equipment yield accepts `line_id` **OR** `device_sn`; reported yield still requires `line_id` |
+| `get_production_root_cause` | `wd.operator` (not `create_user`); equipment join via `t_co_device` bridge |
+| `optimize_production_schedule` | Removed non-existent `mo.status`; SQL errors logged with `logger.exception()` |
+| `analyze_defect_root_cause` | Join `pr.id = prr.doc_id`; column `prr.cause_desc` |
+| `guide_inbound_outbound` | Area lookup on `t_wms_area` by `data_auth` only (`area_sn`, `area_name`) |
 
 ---
 
@@ -42,6 +53,7 @@ sequenceDiagram
 - Production lines in DB use `area_sn` values like `FDQ-SMT-3`, `HZ-SMT-1` (see mesai-query-1.1.md)
 - Generic placeholders like `L-01` are **not** valid line IDs in this database
 - Equipment data date range: ~`2026-05-09` to `2026-06-21`; WIP: ~`2026-01-20` to `2026-06-21`
+- **Equipment logs:** `t_smt_program_consumption_record.area_sn` is often `NULL` in raw machine data — line-scoped equipment queries must resolve devices through `t_co_device.cd_location = :line_id`, not `eq.area_sn`
 
 ---
 
@@ -61,13 +73,13 @@ sequenceDiagram
 
 | Intent | Tool name | Source file | Required params (validation) | Primary tables |
 |---|---|---|---|---|
-| `yield_aggregation` | `get_yield_aggregation` | `production_tools.py` | line_id | t_smt_program_consumption_record OR t_wip_detail+t_co_area |
-| `yield_anomalies` | `get_yield_anomalies_and_peaks` | `production_tools.py` | line_id | same as yield aggregation |
-| `yield_comparison` | `compare_yield_periods` | `production_tools.py` | line_id | same as yield aggregation |
+| `yield_aggregation` | `get_yield_aggregation` | `production_tools.py` | line_id (reported) OR line_id/device_sn (equipment) | t_smt_program_consumption_record+t_co_device OR t_wip_detail+t_co_area |
+| `yield_anomalies` | `get_yield_anomalies_and_peaks` | `production_tools.py` | same as yield_aggregation | same as yield aggregation |
+| `yield_comparison` | `compare_yield_periods` | `production_tools.py` | same as yield_aggregation | same as yield aggregation |
 | `production_product_yield` | `get_product_yield` | `production_tools.py` | line_id + product_code | t_wip_detail, t_co_area, t_co_item |
 | `production_device_rate` | `get_device_production_rate` | `production_tools.py` | device_sn OR line_id | t_smt_program_consumption_record, t_co_device |
 | `production_standard_time` | `get_standard_time_achievement` | `production_tools.py` | line_id + model_code | t_smt_program_consumption_record, t_co_standard_time |
-| `production_root_cause` | `get_production_root_cause` | `production_engines.py` | line_id | t_wip_detail, t_co_area, t_smt_program_consumption_record |
+| `production_root_cause` | `get_production_root_cause` | `production_engines.py` | line_id | t_wip_detail, t_co_area, t_co_device, t_smt_program_consumption_record |
 | `production_scheduling_opt` | `optimize_production_schedule` | `production_engines.py` | line_id | t_aps_plan_mo_info |
 | `production_capacity_forecast` | `forecast_capacity_hr` | `production_engines.py` | line_id | t_smt_program_consumption_record |
 | `quality_defect_analysis` | `get_quality_defect_aggregation` | `quality_tools.py` | (none — workshop scoped) | t_qm_inspect_info |
@@ -81,6 +93,18 @@ sequenceDiagram
 | `warehouse_trace_reverse` | `trace_product_reverse` | `warehouse_tools.py` | finished_lot | t_wip_detail, t_wms_mid_item |
 | `cross_module_analysis` | `cross_module_analysis` | `cross_module.py` | line_id | delegates to 3 tools |
 
+### Param validation rules (`param_validation.py`)
+
+| Validator | Applies to | Rule |
+|---|---|---|
+| `_line_required` | reported yield, product yield, root cause, scheduling, capacity, cross-module | `line_id` must be present |
+| `_device_or_line` | device rate | `device_sn` OR `line_id` |
+| `_yield_scope_required` | yield aggregation, anomalies, comparison | If `yield_type=reported` → `line_id` required; if `equipment` → `line_id` OR `device_sn` |
+| `_line_and_product` | product yield | `line_id` + `product_code`/`model_code` |
+| `_line_and_model` | standard time | `line_id` + `model_code`/`product_code` |
+
+Yield mappers (`param_mappers.py`) pass both `line_id` and `device_sn` as optional stripped strings; validation enforces at least one scope for equipment queries.
+
 ---
 
 ## 3. Shared production yield SQL routing
@@ -89,10 +113,20 @@ Used by `get_yield_aggregation`, `get_yield_anomalies_and_peaks`, `compare_yield
 
 ### Equipment yield (`yield_type=equipment`)
 - **Table:** `n2admin.t_smt_program_consumption_record` (alias `eq`)
-- **Line filter:** `eq.area_sn = :line_id`
+- **Scope filter** (`_equipment_scope_filter` in `production_tools.py`):
+  - If `device_sn` provided: `eq.device_sn = :device_sn`
+  - Else if `line_id` provided: resolve devices via device registry:
+    ```sql
+    eq.device_sn IN (
+        SELECT device_sn FROM n2admin.t_co_device
+        WHERE cd_location = :line_id AND data_auth = :workshop_id
+    )
+    ```
+  - Do **not** use `eq.area_sn = :line_id` — `area_sn` is often NULL on machine logs
 - **RBAC:** `eq.data_auth = :workshop_id`
 - **Time:** `eq.create_time BETWEEN :start_date AND :end_date`
 - **Qty:** `finish_qty`; **denom:** `mount_sheet_qty`
+- **Validation:** `_yield_scope_required()` — equipment accepts `line_id` OR `device_sn`; reported yield requires `line_id` only
 
 ### Reported yield (`yield_type=reported`)
 ```sql
@@ -125,7 +159,8 @@ WHERE line.area_sn = :line_id
 
 **Parameters (SQL binds):**
 
-- `line_id`
+- `line_id (optional for equipment; required for reported)`
+- `device_sn (optional for equipment; direct machine scope)`
 - `workshop_id`
 - `start_date`
 - `end_date`
@@ -136,23 +171,29 @@ WHERE line.area_sn = :line_id
 **SQL:**
 ```sql
 -- Dynamic via _build_aggregation_sql(yield_type, group_by)
--- Equipment example (group_by=hourly):
+-- Equipment example (group_by=hourly, line_id=FDQ-SMT-3):
 SELECT date_trunc('hour', eq.create_time) AS bucket,
        SUM(COALESCE(eq.finish_qty, 0)) AS qty,
        SUM(COALESCE(eq.mount_sheet_qty, 0)) AS denom
 FROM n2admin.t_smt_program_consumption_record eq
-WHERE eq.area_sn = :line_id
+WHERE eq.device_sn IN (
+    SELECT device_sn FROM n2admin.t_co_device
+    WHERE cd_location = :line_id AND data_auth = :workshop_id
+)
   AND eq.data_auth = :workshop_id
   AND eq.create_time BETWEEN :start_date AND :end_date
 GROUP BY bucket ORDER BY bucket
+
+-- Equipment example (device_sn=BB-SMT-029):
+-- WHERE eq.device_sn = :device_sn AND eq.data_auth = :workshop_id ...
 ```
 
-**Columns referenced:** `area_sn`, `finish_qty`, `mount_sheet_qty`, `create_time`, `data_auth`, `pro_qty`, `ng_qty`, `scrap_qty`, `in_time`
+**Columns referenced:** `device_sn`, `cd_location`, `finish_qty`, `mount_sheet_qty`, `create_time`, `data_auth`, `pro_qty`, `ng_qty`, `scrap_qty`, `in_time`
 
 **Post-SQL Python:**
 `_compute_metric()` for sum/average/achievement_rate
 
-**Example NL query:** "Total equipment yield on line FDQ-SMT-3 for 2026-06-20"
+**Example NL query:** "Total equipment yield on line FDQ-SMT-3 for 2026-06-20" or "Equipment yield for device BB-SMT-029 on 2026-06-20"
 
 ---
 
@@ -167,7 +208,8 @@ GROUP BY bucket ORDER BY bucket
 
 **Parameters (SQL binds):**
 
-- `line_id`
+- `line_id (optional for equipment; required for reported)`
+- `device_sn (optional for equipment)`
 - `workshop_id`
 - `start_date`
 - `end_date`
@@ -185,7 +227,7 @@ GROUP BY bucket ORDER BY bucket
 **Post-SQL Python:**
 `population_std_dev()` from core/math_safeguard.py for volatility
 
-**Example NL query:** "Show below-standard hourly yield on FDQ-SMT-3 for 2026-06-15"
+**Example NL query:** "Show below-standard hourly yield on FDQ-SMT-3 for 2026-06-15" or "Below-standard yield for device BB-SMT-029 on 2026-06-15"
 
 ---
 
@@ -200,7 +242,8 @@ GROUP BY bucket ORDER BY bucket
 
 **Parameters (SQL binds):**
 
-- `line_id`
+- `line_id (optional for equipment; required for reported)`
+- `device_sn (optional for equipment)`
 - `workshop_id`
 - `period_1_start/end`
 - `period_2_start/end`
@@ -214,7 +257,7 @@ GROUP BY bucket ORDER BY bucket
 **Post-SQL Python:**
 `period_over_period_growth_rate()` from core/math_safeguard.py
 
-**Example NL query:** "Compare equipment yield on FDQ-SMT-3 between 2026-06-10 and 2026-06-17"
+**Example NL query:** "Compare equipment yield on FDQ-SMT-3 between 2026-06-10 and 2026-06-17" or "Compare yield for device BB-SMT-029 week over week"
 
 ---
 
@@ -287,11 +330,14 @@ JOIN n2admin.t_co_device d ON eq.device_sn = d.device_sn
 WHERE eq.data_auth = :workshop_id
   AND eq.create_time BETWEEN :start_date AND :end_date
   [AND eq.device_sn = :device_sn]
-  [AND eq.area_sn = :line_id]
+  [AND eq.device_sn IN (
+      SELECT device_sn FROM n2admin.t_co_device
+      WHERE cd_location = :line_id AND data_auth = :workshop_id
+  )]
 GROUP BY eq.device_sn, d.device_name ORDER BY avg_rate DESC
 ```
 
-**Columns referenced:** `device_sn`, `device_name`, `finish_qty`, `area_sn`
+**Columns referenced:** `device_sn`, `device_name`, `cd_location`, `finish_qty`
 
 **Post-SQL Python:**
 Round avg_rate and total_qty per device
@@ -334,6 +380,9 @@ WHERE eq.area_sn = :line_id AND eq.model_code = :model_code
 **Post-SQL Python:**
 achievement_pct = actual_qty / (standard_time * elapsed_hours) * 100
 
+**Known issues (still open):**
+- Filters `eq.area_sn = :line_id` — `area_sn` is often NULL on consumption records; should use `t_co_device.cd_location` bridge (see Section 5)
+
 **Example NL query:** "Standard time achievement for model 2101200000242 on FDQ-SMT-1 last week"
 
 ---
@@ -356,24 +405,29 @@ achievement_pct = actual_qty / (standard_time * elapsed_hours) * 100
 
 **SQL:**
 ```sql
-SELECT wd.pro_lot, wd.create_user, eq.device_sn,
+SELECT wd.pro_lot, wd.operator, eq.device_sn,
        date_trunc('hour', COALESCE(wd.in_time, wd.create_time)) AS bucket,
        SUM(COALESCE(wd.pro_qty, 0) - COALESCE(wd.ng_qty, 0) - COALESCE(wd.scrap_qty, 0)) AS good_qty
 FROM n2admin.t_wip_detail wd
 JOIN n2admin.t_co_area ws ON wd.work_stationsn = ws.area_sn
 JOIN n2admin.t_co_area line ON ws.parent_sn = line.area_sn
 LEFT JOIN n2admin.t_smt_program_consumption_record eq
-  ON eq.area_sn = line.area_sn AND eq.create_time BETWEEN :start_date AND :end_date
+  ON eq.device_sn IN (
+      SELECT device_sn FROM n2admin.t_co_device
+      WHERE cd_location = :line_id AND data_auth = :workshop_id
+  )
+ AND eq.create_time BETWEEN :start_date AND :end_date
+ AND eq.data_auth = :workshop_id
 WHERE line.area_sn = :line_id AND wd.data_auth = :workshop_id
   AND COALESCE(wd.in_time, wd.create_time) BETWEEN :start_date AND :end_date
-GROUP BY wd.pro_lot, wd.create_user, eq.device_sn, bucket
+GROUP BY wd.pro_lot, wd.operator, eq.device_sn, bucket
+ORDER BY bucket
 ```
+
+**Columns referenced:** `pro_lot`, `operator`, `device_sn`, `cd_location`, `work_stationsn`, `parent_sn`, `area_sn`, `pro_qty`, `ng_qty`, `scrap_qty`
 
 **Post-SQL Python:**
 Counter scoring on dip rows (< 85% of mean); rank batch_lot, device_sn, operator
-
-**Known issues:**
-- **BUG:** SQL uses `wd.create_user` — column does not exist; schema has `operator`
 
 **Example NL query:** "Root cause for yield dip on FDQ-SMT-3 between 2026-06-10 and 2026-06-17"
 
@@ -394,18 +448,18 @@ Counter scoring on dip rows (< 85% of mean); rank batch_lot, device_sn, operator
 
 **SQL:**
 ```sql
-SELECT mo.mo_number, mo.plan_qty, mo.plan_start_time, mo.plan_end_time, mo.status
+SELECT mo.mo_number, mo.plan_qty, mo.plan_start_time, mo.plan_end_time
 FROM n2admin.t_aps_plan_mo_info mo
 WHERE mo.data_auth = :workshop_id AND mo.plan_start_time >= NOW()
 ORDER BY mo.plan_start_time LIMIT 50
 ```
 
 **Post-SQL Python:**
-Priority score heuristic; returns [] on SQL error or no rows
+Priority score heuristic; returns `[]` on SQL error or no rows
 
-**Known issues:**
-- **BUG:** `mo.status` column does not exist in t_aps_plan_mo_info
-- SQL exceptions swallowed → empty schedule
+**Operational notes:**
+- `mo.status` removed — column does not exist on `t_aps_plan_mo_info`
+- SQL exceptions are logged via `logger.exception()` (not silently swallowed)
 
 **Example NL query:** "Optimize production schedule for line FDQ-SMT-3"
 
@@ -437,6 +491,9 @@ WHERE eq.area_sn = :line_id AND eq.data_auth = :workshop_id
 
 **Post-SQL Python:**
 utilization, overtime_hours_estimate, personnel_gap computed in Python
+
+**Known issues (still open):**
+- Filters `eq.area_sn = :line_id` — should use `t_co_device.cd_location` bridge (see Section 5)
 
 **Example NL query:** "Capacity forecast for line FDQ-SMT-3 for next 14 days"
 
@@ -496,20 +553,18 @@ defect_rate = defects/inspected*100; per-step breakdown
 
 **SQL:**
 ```sql
-SELECT pr.problem_desc, prr.reason_desc, COUNT(*) AS cnt
+SELECT pr.problem_desc, prr.cause_desc, COUNT(*) AS cnt
 FROM n2admin.t_qm_problem_report pr
-LEFT JOIN n2admin.t_qm_problem_reason prr ON pr.id = prr.problem_id
+LEFT JOIN n2admin.t_qm_problem_reason prr ON pr.id = prr.doc_id
 WHERE pr.data_auth = :workshop_id
   AND pr.create_time BETWEEN :start_date AND :end_date
-GROUP BY pr.problem_desc, prr.reason_desc ORDER BY cnt DESC LIMIT 10
+GROUP BY pr.problem_desc, prr.cause_desc ORDER BY cnt DESC LIMIT 10
 ```
+
+**Columns referenced:** `problem_desc`, `cause_desc`, `doc_id`, `create_time`, `data_auth`
 
 **Post-SQL Python:**
 Score = cnt/10 per hypothesis
-
-**Known issues:**
-- **BUG:** Join should use `prr.doc_id = pr.id` not `prr.problem_id`
-- **BUG:** Column is `cause_desc` not `reason_desc`
 
 **Example NL query:** "Analyze quality root causes last 30 days"
 
@@ -624,18 +679,22 @@ low_stock if qty < min_stock; expiring if invalid_date within 30 days
 
 **SQL:**
 ```sql
-SELECT storage_code, district_code FROM n2admin.t_wms_area
-WHERE wh_code = :wh_code AND data_auth = :workshop_id LIMIT 1;
-SELECT item_lot, item_qty, instock_time FROM n2admin.t_wms_stock_info
-WHERE wh_code = :wh_code AND item_code = :item_code AND data_auth = :workshop_id AND item_qty > 0
+SELECT area_sn, area_name
+FROM n2admin.t_wms_area
+WHERE data_auth = :workshop_id
+LIMIT 1;
+
+SELECT item_lot, item_qty, instock_time
+FROM n2admin.t_wms_stock_info
+WHERE wh_code = :wh_code AND item_code = :item_code
+  AND data_auth = :workshop_id AND item_qty > 0
 ORDER BY instock_time ASC
 ```
 
-**Post-SQL Python:**
-FIFO sort by instock_time; recommended_bay from area query
+**Columns referenced:** `area_sn`, `area_name`, `wh_code`, `item_code`, `item_lot`, `instock_time`
 
-**Known issues:**
-- **BUG:** t_wms_area has no wh_code, storage_code, or district_code columns
+**Post-SQL Python:**
+FIFO sort by `instock_time`; `recommended_bay` = `area_sn` or `area_name` from area query
 
 **Example NL query:** "Guide outbound for item 2101200000217 from warehouse WH01"
 
@@ -773,24 +832,36 @@ Calls in parallel:
 
 ## 5. Known schema / SQL mismatches
 
+### Resolved (2026-06-23 application-layer fixes)
+
+| Tool / file | Was broken | Fixed to |
+|---|---|---|
+| yield tools (equipment) | `eq.area_sn = :line_id` | `t_co_device.cd_location` subquery or `eq.device_sn = :device_sn` |
+| yield param validation | `line_id` always required | Equipment: `line_id` OR `device_sn` via `_yield_scope_required()` |
+| root_cause.py | `wd.create_user` | `wd.operator` |
+| root_cause.py | `eq.area_sn = line.area_sn` join | `eq.device_sn IN (SELECT … FROM t_co_device WHERE cd_location = :line_id)` |
+| scheduling.py | `mo.status` in SELECT | Removed; errors logged with `logger.exception()` |
+| analyze_defect_root_cause | `prr.problem_id`, `prr.reason_desc` | `prr.doc_id`, `prr.cause_desc` |
+| guide_inbound_outbound | `t_wms_area.wh_code`, `storage_code`, `district_code` | `t_wms_area` lookup by `data_auth` → `area_sn`, `area_name` |
+
+### Still open
+
 | Tool / file | SQL uses | Actual schema | Severity |
 |---|---|---|---|
-| root_cause.py | `wd.create_user` | `t_wip_detail.operator` (no create_user) | SQL error |
-| quality_tools analyze_defect_root_cause | `prr.problem_id` | `t_qm_problem_reason.doc_id` | Join fails / empty |
-| quality_tools analyze_defect_root_cause | `prr.reason_desc` | `t_qm_problem_reason.cause_desc` | SQL error |
+| get_standard_time_achievement | `eq.area_sn = :line_id` | `area_sn` often NULL on consumption records; use `t_co_device` bridge | Empty results |
+| forecast_capacity_hr | `eq.area_sn = :line_id` | Same as above | Empty results |
 | check_error_prevention | `scheme_name`, `inspect_item`, `test_step` on scheme | Scheme has `doc_no`, `test_item_type` — no those columns | SQL error |
 | check_error_prevention | `inspect_item`, `test_step` on IPQC | IPQC has `area_sn`, `model_code`, `product_step` | SQL error |
-| scheduling.py | `mo.status` | Not in `t_aps_plan_mo_info` | SQL error (swallowed) |
-| guide_inbound_outbound | `t_wms_area.wh_code`, `storage_code`, `district_code` | `t_wms_area` has `area_sn`, `area_name`; storage cols on `t_wms_stock_info` | SQL error |
-| get_product_yield filter | `wd.model_code = :product_code` | Product codes are numeric item codes e.g. `2101200000217` — must match `model_code` column | Empty results if wrong format |
+| get_product_yield filter | `wd.model_code = :product_code` | Product codes are numeric item codes e.g. `2101200000217` — must match `model_code` column (`varchar(100)`) | Empty results if wrong format |
 | Line ID format | `line_id` = `L-01` | Real values: `FDQ-SMT-3`, `HZ-SMT-1` per mesai-query-1.1.md | Empty results |
 | data_auth RBAC | `X-MES-Workshop-Id: WS-042` | Must match actual `data_auth` values in DB rows | Empty results |
 | Date range | Queries for today only | Equipment data starts ~2026-05-09 | Empty results |
 
 ### Operational notes
-- Scheduling tool catches all SQL exceptions and returns `[]` — failures appear as empty schedule, not error message
+- Scheduling tool still returns `[]` when the query fails or returns no rows, but failures are now logged to the terminal via `logger.exception()`
 - `BaseMCPTool.run()` catches exceptions and returns `MCPToolResult(success=False, error=str(exc))`
-- Param validation returns user message **before** DB when `line_id` etc. missing (no dummy `L-01` fallback)
+- Param validation returns user message **before** DB when required entities missing (no dummy `L-01` fallback)
+- Equipment yield: pass `device_sn` (e.g. `BB-SMT-029`) when line-based scope returns empty — verify `t_co_device.cd_location` matches the line `area_sn`
 
 ---
 
@@ -799,11 +870,11 @@ Calls in parallel:
 1. `curl http://127.0.0.1:8000/api/v1/health` — confirm version 0.3.0
 2. Verify `DATABASE_URL` in `.env` — run `SELECT 1` at startup
 3. Set `X-MES-Workshop-Id` to a real `data_auth` value from the database
-4. Use line IDs from [mesai-query-1.1.md](./mesai-query-1.1.md) (`FDQ-SMT-3`, not `L-01`)
+4. Use line IDs from [mesai-query-1.1.md](./mesai-query-1.1.md) (`FDQ-SMT-3`, not `L-01`); for equipment-only queries use `device_sn` (e.g. `BB-SMT-029`)
 5. Use in-range dates (`2026-05-09` – `2026-06-21` for equipment)
 6. Set `DEBUG=true` for Bailian raw JSON + SQL echo
 7. Cross-reference SQL column names against Section 7 before assuming empty data
-8. Test single tool directly:
+8. Test single tool directly (line scope):
 
 ```python
 import asyncio
@@ -811,7 +882,7 @@ from datetime import datetime
 from mcp_tools.production_tools import get_yield_aggregation_tool, YieldAggregationParams, YieldType, GroupBy, Metric
 from models.schemas import MCPContext
 
-async def test():
+async def test_line():
     params = YieldAggregationParams(
         yield_type=YieldType.EQUIPMENT,
         line_id="FDQ-SMT-3",
@@ -823,7 +894,19 @@ async def test():
     result = await get_yield_aggregation_tool.run(params, MCPContext(workshop_id="YOUR_DATA_AUTH"))
     print(result)
 
-asyncio.run(test())
+async def test_device():
+    params = YieldAggregationParams(
+        yield_type=YieldType.EQUIPMENT,
+        device_sn="BB-SMT-029",
+        start_date=datetime(2026, 6, 20),
+        end_date=datetime(2026, 6, 21),
+        group_by=GroupBy.DAILY,
+        metric=Metric.SUM,
+    )
+    result = await get_yield_aggregation_tool.run(params, MCPContext(workshop_id="YOUR_DATA_AUTH"))
+    print(result)
+
+asyncio.run(test_device())
 ```
 
 ---
@@ -837,6 +920,7 @@ All tables in schema `n2admin`. Source: `db/schema.sql`.
 - **schema.sql line:** 136721
 - **Comment:** PM-设备程式消耗记录表
 - **Used by MCP tools:** get_yield_aggregation, get_yield_anomalies_and_peaks, compare_yield_periods, get_device_production_rate, get_standard_time_achievement, get_production_root_cause, forecast_capacity_hr
+- **MCP note:** `area_sn` exists in schema but is often **NULL** in live machine logs. Line-scoped equipment tools resolve devices via `t_co_device.cd_location`; direct machine queries use `device_sn`.
 
 | column_name | data_type | nullable |
 |---|---|---|
@@ -864,6 +948,7 @@ All tables in schema `n2admin`. Source: `db/schema.sql`.
 - **schema.sql line:** 140176
 - **Comment:** PM-产品过站详情
 - **Used by MCP tools:** get_yield_aggregation (reported), get_product_yield, get_production_root_cause, trace_material_forward, trace_product_reverse
+- **MCP note:** `get_production_root_cause` uses `operator` for dip correlation — not `create_user` (both columns exist; operator is the workstation operator field)
 
 | column_name | data_type | nullable |
 |---|---|---|
@@ -1006,7 +1091,8 @@ All tables in schema `n2admin`. Source: `db/schema.sql`.
 
 - **schema.sql line:** 45171
 - **Comment:** PM-设备信息
-- **Used by MCP tools:** get_device_production_rate
+- **Used by MCP tools:** get_device_production_rate, get_yield_aggregation (equipment scope), get_yield_anomalies_and_peaks, compare_yield_periods, get_production_root_cause
+- **MCP note:** `cd_location` stores the production line `area_sn` (e.g. `FDQ-SMT-3`) — bridge table for equipment queries when `eq.area_sn` is NULL
 
 | column_name | data_type | nullable |
 |---|---|---|

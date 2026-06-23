@@ -6,7 +6,7 @@ period comparison. The LLM passes structured parameters only; SQL is
 predefined and table-routed — never LLM-generated.
 
 Table routing:
-  equipment → n2admin.t_smt_program_consumption_record (area_sn = line_id)
+  equipment → n2admin.t_smt_program_consumption_record via t_co_device.cd_location or device_sn
   reported  → n2admin.t_wip_detail JOIN t_co_area (line.area_sn = line_id)
 """
 
@@ -61,7 +61,8 @@ class AnalysisType(str, Enum):
 
 class YieldAggregationParams(BaseModel):
     yield_type: YieldType
-    line_id: str
+    line_id: Optional[str] = None
+    device_sn: Optional[str] = None
     start_date: datetime
     end_date: datetime
     group_by: GroupBy
@@ -70,7 +71,8 @@ class YieldAggregationParams(BaseModel):
 
 class YieldAggregationResult(BaseModel):
     yield_type: str
-    line_id: str
+    line_id: Optional[str] = None
+    device_sn: Optional[str] = None
     metric: str
     group_by: str
     value: float
@@ -80,7 +82,8 @@ class YieldAggregationResult(BaseModel):
 
 class YieldAnomaliesParams(BaseModel):
     yield_type: YieldType
-    line_id: str
+    line_id: Optional[str] = None
+    device_sn: Optional[str] = None
     start_date: datetime
     end_date: datetime
     analysis_type: AnalysisType
@@ -89,7 +92,8 @@ class YieldAnomaliesParams(BaseModel):
 
 class YieldAnomaliesResult(BaseModel):
     yield_type: str
-    line_id: str
+    line_id: Optional[str] = None
+    device_sn: Optional[str] = None
     analysis_type: str
     workshop_id: str
     result: dict[str, Any]
@@ -97,7 +101,8 @@ class YieldAnomaliesResult(BaseModel):
 
 class CompareYieldPeriodsParams(BaseModel):
     yield_type: YieldType
-    line_id: str
+    line_id: Optional[str] = None
+    device_sn: Optional[str] = None
     period_1_start: datetime
     period_1_end: datetime
     period_2_start: datetime
@@ -106,7 +111,8 @@ class CompareYieldPeriodsParams(BaseModel):
 
 class CompareYieldPeriodsResult(BaseModel):
     yield_type: str
-    line_id: str
+    line_id: Optional[str] = None
+    device_sn: Optional[str] = None
     workshop_id: str
     period_1_total: float
     period_2_total: float
@@ -122,7 +128,8 @@ def build_yield_from_clause(yield_type: YieldType) -> str:
     """
     Route yield_type to the correct table(s).
 
-    equipment: single table filtered by area_sn (line body SN).
+    equipment: consumption records — scoped by device_sn / t_co_device.cd_location
+               (area_sn on eq is often NULL in raw machine logs).
     reported:  join wip workstation records up to the parent line node
                in t_co_area — never filter t_wip_detail by line directly.
     """
@@ -135,9 +142,30 @@ def build_yield_from_clause(yield_type: YieldType) -> str:
     """
 
 
-def _line_filter(yield_type: YieldType) -> str:
+def _equipment_scope_filter(line_id: Optional[str], device_sn: Optional[str]) -> str:
+    """
+    Filter equipment consumption rows without using eq.area_sn (often NULL).
+
+    Prefer direct device_sn; otherwise resolve devices registered at cd_location = line_id.
+    """
+    if device_sn:
+        return "eq.device_sn = :device_sn"
+    if line_id:
+        return """eq.device_sn IN (
+            SELECT device_sn FROM n2admin.t_co_device
+            WHERE cd_location = :line_id
+              AND data_auth = :workshop_id
+        )"""
+    return "1=0"
+
+
+def _line_filter(
+    yield_type: YieldType,
+    line_id: Optional[str] = None,
+    device_sn: Optional[str] = None,
+) -> str:
     if yield_type == YieldType.EQUIPMENT:
-        return "eq.area_sn = :line_id"
+        return _equipment_scope_filter(line_id, device_sn)
     return "line.area_sn = :line_id"
 
 
@@ -156,6 +184,9 @@ def _time_column(yield_type: YieldType) -> str:
 def _build_aggregation_sql(
     yield_type: YieldType,
     group_by: GroupBy,
+    *,
+    line_id: Optional[str] = None,
+    device_sn: Optional[str] = None,
 ) -> str:
     """
     Build a parameterized SELECT that fetches raw numeric rows for Python
@@ -163,7 +194,7 @@ def _build_aggregation_sql(
     """
     from_clause = build_yield_from_clause(yield_type)
     time_col = _time_column(yield_type)
-    line_filter = _line_filter(yield_type)
+    scope_filter = _line_filter(yield_type, line_id=line_id, device_sn=device_sn)
     rbac_filter = _rbac_filter(yield_type)
 
     if yield_type == YieldType.EQUIPMENT:
@@ -192,7 +223,7 @@ def _build_aggregation_sql(
         return f"""
             SELECT {select_cols}
             FROM {from_clause}
-            WHERE {line_filter}
+            WHERE {scope_filter}
               AND {rbac_filter}
               AND {time_range}
         """
@@ -216,7 +247,7 @@ def _build_aggregation_sql(
     return f"""
         SELECT {select_cols}
         FROM {from_clause}
-        WHERE {line_filter}
+        WHERE {scope_filter}
           AND {rbac_filter}
           AND {time_range}
         GROUP BY {bucket}
@@ -228,22 +259,28 @@ async def _fetch_aggregation_rows(
     session: AsyncSession,
     *,
     yield_type: YieldType,
-    line_id: str,
+    line_id: Optional[str],
+    device_sn: Optional[str],
     workshop_id: str,
     start_date: datetime,
     end_date: datetime,
     group_by: GroupBy,
 ) -> list[dict[str, Any]]:
-    sql = text(_build_aggregation_sql(yield_type, group_by))
-    result = await session.execute(
-        sql,
-        {
-            "line_id": line_id,
-            "workshop_id": workshop_id,
-            "start_date": start_date,
-            "end_date": end_date,
-        },
+    sql = text(
+        _build_aggregation_sql(
+            yield_type, group_by, line_id=line_id, device_sn=device_sn
+        )
     )
+    bind: dict[str, Any] = {
+        "workshop_id": workshop_id,
+        "start_date": start_date,
+        "end_date": end_date,
+    }
+    if line_id:
+        bind["line_id"] = line_id
+    if device_sn:
+        bind["device_sn"] = device_sn
+    result = await session.execute(sql, bind)
     return [dict(row) for row in result.mappings().all()]
 
 
@@ -315,7 +352,8 @@ async def _fetch_period_total(
     session: AsyncSession,
     *,
     yield_type: YieldType,
-    line_id: str,
+    line_id: Optional[str],
+    device_sn: Optional[str],
     workshop_id: str,
     start_date: datetime,
     end_date: datetime,
@@ -324,6 +362,7 @@ async def _fetch_period_total(
         session,
         yield_type=yield_type,
         line_id=line_id,
+        device_sn=device_sn,
         workshop_id=workshop_id,
         start_date=start_date,
         end_date=end_date,
@@ -354,6 +393,7 @@ class GetYieldAggregationTool(BaseMCPTool[YieldAggregationParams, YieldAggregati
                 session,
                 yield_type=params.yield_type,
                 line_id=params.line_id,
+                device_sn=params.device_sn,
                 workshop_id=context.workshop_id,
                 start_date=params.start_date,
                 end_date=params.end_date,
@@ -365,6 +405,7 @@ class GetYieldAggregationTool(BaseMCPTool[YieldAggregationParams, YieldAggregati
             return YieldAggregationResult(
                 yield_type=params.yield_type.value,
                 line_id=params.line_id,
+                device_sn=params.device_sn,
                 metric=params.metric.value,
                 group_by=params.group_by.value,
                 value=round(value, 4),
@@ -399,6 +440,7 @@ class GetYieldAnomaliesAndPeaksTool(
                 session,
                 yield_type=params.yield_type,
                 line_id=params.line_id,
+                device_sn=params.device_sn,
                 workshop_id=context.workshop_id,
                 start_date=params.start_date,
                 end_date=params.end_date,
@@ -425,6 +467,7 @@ class GetYieldAnomaliesAndPeaksTool(
                     session,
                     yield_type=params.yield_type,
                     line_id=params.line_id,
+                    device_sn=params.device_sn,
                     workshop_id=context.workshop_id,
                     start_date=params.start_date,
                     end_date=params.end_date,
@@ -464,6 +507,7 @@ class GetYieldAnomaliesAndPeaksTool(
             return YieldAnomaliesResult(
                 yield_type=params.yield_type.value,
                 line_id=params.line_id,
+                device_sn=params.device_sn,
                 analysis_type=params.analysis_type.value,
                 workshop_id=context.workshop_id,
                 result=result,
@@ -494,6 +538,7 @@ class CompareYieldPeriodsTool(
                 session,
                 yield_type=params.yield_type,
                 line_id=params.line_id,
+                device_sn=params.device_sn,
                 workshop_id=context.workshop_id,
                 start_date=params.period_1_start,
                 end_date=params.period_1_end,
@@ -502,6 +547,7 @@ class CompareYieldPeriodsTool(
                 session,
                 yield_type=params.yield_type,
                 line_id=params.line_id,
+                device_sn=params.device_sn,
                 workshop_id=context.workshop_id,
                 start_date=params.period_2_start,
                 end_date=params.period_2_end,
@@ -513,6 +559,7 @@ class CompareYieldPeriodsTool(
             return CompareYieldPeriodsResult(
                 yield_type=params.yield_type.value,
                 line_id=params.line_id,
+                device_sn=params.device_sn,
                 workshop_id=context.workshop_id,
                 period_1_total=round(period_1_total, 4),
                 period_2_total=round(period_2_total, 4),
@@ -609,8 +656,13 @@ class GetDeviceProductionRateTool(BaseMCPTool):
             if params.device_sn:
                 filters.append("eq.device_sn = :device_sn")
                 bind["device_sn"] = params.device_sn
-            if params.line_id:
-                filters.append("eq.area_sn = :line_id")
+            elif params.line_id:
+                filters.append(
+                    """eq.device_sn IN (
+                        SELECT device_sn FROM n2admin.t_co_device
+                        WHERE cd_location = :line_id AND data_auth = :workshop_id
+                    )"""
+                )
                 bind["line_id"] = params.line_id
 
             where = " AND ".join(filters)

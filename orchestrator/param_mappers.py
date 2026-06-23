@@ -87,7 +87,8 @@ def intent_to_aggregation_params(intent: IntentSchema) -> YieldAggregationParams
     start, end = _date_range(intent)
     return YieldAggregationParams(
         yield_type=_resolve_yield_type(intent),
-        line_id=_line_id(intent),
+        line_id=_strip(intent.line_id),
+        device_sn=_strip(intent.device_sn),
         start_date=_start_of_day(start),
         end_date=_end_of_day(end),
         group_by=GroupBy(intent.group_by or GroupBy.DAILY.value),
@@ -99,7 +100,8 @@ def intent_to_anomalies_params(intent: IntentSchema) -> YieldAnomaliesParams:
     start, end = _date_range(intent)
     return YieldAnomaliesParams(
         yield_type=_resolve_yield_type(intent),
-        line_id=_line_id(intent),
+        line_id=_strip(intent.line_id),
+        device_sn=_strip(intent.device_sn),
         start_date=_start_of_day(start),
         end_date=_end_of_day(end),
         analysis_type=AnalysisType(intent.analysis_type or AnalysisType.VOLATILITY.value),
@@ -115,7 +117,8 @@ def intent_to_comparison_params(intent: IntentSchema) -> CompareYieldPeriodsPara
     p2e = intent.period_2_end or today
     return CompareYieldPeriodsParams(
         yield_type=_resolve_yield_type(intent),
-        line_id=_line_id(intent),
+        line_id=_strip(intent.line_id),
+        device_sn=_strip(intent.device_sn),
         period_1_start=_start_of_day(p1s),
         period_1_end=_end_of_day(p1e),
         period_2_start=_start_of_day(p2s),

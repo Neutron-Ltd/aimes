@@ -117,10 +117,17 @@ def _finished_lot_required(intent: IntentSchema) -> Optional[str]:
     return None
 
 
+def _yield_scope_required(intent: IntentSchema) -> Optional[str]:
+    """Reported yield needs line_id; equipment yield accepts line_id OR device_sn."""
+    if intent.yield_type == "reported":
+        return _line_required(intent)
+    return _device_or_line(intent)
+
+
 INTENT_VALIDATORS: dict[IntentType, Validator] = {
-    IntentType.YIELD_AGGREGATION: _line_required,
-    IntentType.YIELD_ANOMALIES: _line_required,
-    IntentType.YIELD_COMPARISON: _line_required,
+    IntentType.YIELD_AGGREGATION: _yield_scope_required,
+    IntentType.YIELD_ANOMALIES: _yield_scope_required,
+    IntentType.YIELD_COMPARISON: _yield_scope_required,
     IntentType.PRODUCTION_PRODUCT_YIELD: _line_and_product,
     IntentType.PRODUCTION_STANDARD_TIME: _line_and_model,
     IntentType.PRODUCTION_DEVICE_RATE: _device_or_line,

@@ -99,9 +99,9 @@ class GuideInboundOutboundTool(BaseMCPTool[InboundOutboundParams, InboundOutboun
         try:
             area_sql = text(
                 """
-                SELECT storage_code, district_code
+                SELECT area_sn, area_name
                 FROM n2admin.t_wms_area
-                WHERE wh_code = :wh_code AND data_auth = :workshop_id
+                WHERE data_auth = :workshop_id
                 LIMIT 1
                 """
             )
@@ -119,14 +119,14 @@ class GuideInboundOutboundTool(BaseMCPTool[InboundOutboundParams, InboundOutboun
                 "item_code": params.item_code,
                 "workshop_id": context.workshop_id,
             }
-            area = (await session.execute(area_sql, bind)).mappings().first()
+            area = (await session.execute(area_sql, {"workshop_id": context.workshop_id})).mappings().first()
             lots = [dict(r) for r in (await session.execute(stock_sql, bind)).mappings().all()]
         finally:
             await session.close()
 
         recommended = None
         if area:
-            recommended = area.get("storage_code") or area.get("district_code")
+            recommended = area.get("area_sn") or area.get("area_name")
 
         fifo_lots = sorted(
             lots,

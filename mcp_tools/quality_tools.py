@@ -98,12 +98,12 @@ class AnalyzeDefectRootCauseTool(
         try:
             sql = text(
                 """
-                SELECT pr.problem_desc, prr.reason_desc, COUNT(*) AS cnt
+                SELECT pr.problem_desc, prr.cause_desc, COUNT(*) AS cnt
                 FROM n2admin.t_qm_problem_report pr
-                LEFT JOIN n2admin.t_qm_problem_reason prr ON pr.id = prr.problem_id
+                LEFT JOIN n2admin.t_qm_problem_reason prr ON pr.id = prr.doc_id
                 WHERE pr.data_auth = :workshop_id
                   AND pr.create_time BETWEEN :start_date AND :end_date
-                GROUP BY pr.problem_desc, prr.reason_desc
+                GROUP BY pr.problem_desc, prr.cause_desc
                 ORDER BY cnt DESC
                 LIMIT 10
                 """
@@ -123,7 +123,7 @@ class AnalyzeDefectRootCauseTool(
         hypotheses = [
             {
                 "problem": r.get("problem_desc"),
-                "reason": r.get("reason_desc"),
+                "reason": r.get("cause_desc"),
                 "score": round(float(r.get("cnt") or 0) / 10.0, 4),
             }
             for r in rows
