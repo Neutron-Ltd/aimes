@@ -33,13 +33,7 @@ async def optimize_schedule(params: SchedulingParams, workshop_id: str) -> list[
         await session.close()
 
     if not orders:
-        return [
-            {
-                "mo_number": f"MO-{params.line_id}-001",
-                "priority_score": 0.9,
-                "reason": "default_queue_no_aps_data",
-            }
-        ]
+        return []
 
     schedule: list[dict[str, Any]] = []
     for i, order in enumerate(orders):

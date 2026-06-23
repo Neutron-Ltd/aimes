@@ -67,7 +67,10 @@ class IntentSchema(BaseModel):
     finished_lot: Optional[str] = None
     process_code: Optional[str] = None
     line_id: Optional[str] = None
-    yield_type: str = Field(default="equipment")
+    yield_type: Optional[str] = Field(
+        default=None,
+        description="equipment or reported — null when not stated by user",
+    )
     group_by: Optional[str] = None
     metric: Optional[str] = None
     analysis_type: Optional[str] = None
@@ -88,7 +91,7 @@ class BailianIntentExtraction(BaseModel):
     """Strict schema for raw Bailian JSON before mapping to IntentSchema."""
 
     intent: str
-    yield_type: str = "equipment"
+    yield_type: Optional[str] = None
     line_id: Optional[str] = None
     start_date: Optional[str] = None
     end_date: Optional[str] = None

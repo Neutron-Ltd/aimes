@@ -1,8 +1,14 @@
-"""Map IntentSchema → MCP tool parameter models."""
+"""Map IntentSchema → MCP tool parameter models.
+
+Entity identifiers are passed through as extracted — no dummy defaults.
+Temporal defaults (e.g. today for date ranges) are applied only where noted.
+Required-entity checks run in orchestrator.param_validation before dispatch.
+"""
 
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
+from typing import Optional
 
 from mcp_tools.production_tools import (
     AnalysisType,
@@ -36,8 +42,6 @@ from models.intents.warehouse import (
 )
 from models.schemas import IntentSchema, IntentType
 
-DEFAULT_LINE_ID = "L-01"
-
 
 def _start_of_day(d: date) -> datetime:
     return datetime.combine(d, time.min)
@@ -48,7 +52,9 @@ def _end_of_day(d: date) -> datetime:
 
 
 def _resolve_yield_type(intent: IntentSchema) -> YieldType:
-    return YieldType.REPORTED if intent.yield_type == "reported" else YieldType.EQUIPMENT
+    if intent.yield_type == "reported":
+        return YieldType.REPORTED
+    return YieldType.EQUIPMENT
 
 
 def _date_range(intent: IntentSchema) -> tuple[date, date]:
@@ -58,11 +64,30 @@ def _date_range(intent: IntentSchema) -> tuple[date, date]:
     return today, today
 
 
+def _strip(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _first_present(*values: Optional[str]) -> str:
+    for value in values:
+        cleaned = _strip(value)
+        if cleaned:
+            return cleaned
+    raise ValueError("Required identifier missing — validation should have caught this")
+
+
+def _line_id(intent: IntentSchema) -> str:
+    return _first_present(intent.line_id)
+
+
 def intent_to_aggregation_params(intent: IntentSchema) -> YieldAggregationParams:
     start, end = _date_range(intent)
     return YieldAggregationParams(
         yield_type=_resolve_yield_type(intent),
-        line_id=intent.line_id or DEFAULT_LINE_ID,
+        line_id=_line_id(intent),
         start_date=_start_of_day(start),
         end_date=_end_of_day(end),
         group_by=GroupBy(intent.group_by or GroupBy.DAILY.value),
@@ -74,7 +99,7 @@ def intent_to_anomalies_params(intent: IntentSchema) -> YieldAnomaliesParams:
     start, end = _date_range(intent)
     return YieldAnomaliesParams(
         yield_type=_resolve_yield_type(intent),
-        line_id=intent.line_id or DEFAULT_LINE_ID,
+        line_id=_line_id(intent),
         start_date=_start_of_day(start),
         end_date=_end_of_day(end),
         analysis_type=AnalysisType(intent.analysis_type or AnalysisType.VOLATILITY.value),
@@ -90,7 +115,7 @@ def intent_to_comparison_params(intent: IntentSchema) -> CompareYieldPeriodsPara
     p2e = intent.period_2_end or today
     return CompareYieldPeriodsParams(
         yield_type=_resolve_yield_type(intent),
-        line_id=intent.line_id or DEFAULT_LINE_ID,
+        line_id=_line_id(intent),
         period_1_start=_start_of_day(p1s),
         period_1_end=_end_of_day(p1e),
         period_2_start=_start_of_day(p2s),
@@ -101,8 +126,8 @@ def intent_to_comparison_params(intent: IntentSchema) -> CompareYieldPeriodsPara
 def intent_to_product_yield_params(intent: IntentSchema) -> ProductYieldParams:
     start, end = _date_range(intent)
     return ProductYieldParams(
-        line_id=intent.line_id or DEFAULT_LINE_ID,
-        product_code=intent.product_code or intent.model_code or "",
+        line_id=_line_id(intent),
+        product_code=_first_present(intent.product_code, intent.model_code),
         start_date=_start_of_day(start),
         end_date=_end_of_day(end),
     )
@@ -111,8 +136,8 @@ def intent_to_product_yield_params(intent: IntentSchema) -> ProductYieldParams:
 def intent_to_device_rate_params(intent: IntentSchema) -> DeviceRateParams:
     start, end = _date_range(intent)
     return DeviceRateParams(
-        device_sn=intent.device_sn,
-        line_id=intent.line_id,
+        device_sn=_strip(intent.device_sn),
+        line_id=_strip(intent.line_id),
         start_date=_start_of_day(start),
         end_date=_end_of_day(end),
     )
@@ -121,8 +146,8 @@ def intent_to_device_rate_params(intent: IntentSchema) -> DeviceRateParams:
 def intent_to_standard_time_params(intent: IntentSchema) -> StandardTimeAchievementParams:
     start, end = _date_range(intent)
     return StandardTimeAchievementParams(
-        line_id=intent.line_id or DEFAULT_LINE_ID,
-        model_code=intent.model_code or intent.product_code or "",
+        line_id=_line_id(intent),
+        model_code=_first_present(intent.model_code, intent.product_code),
         start_date=_start_of_day(start),
         end_date=_end_of_day(end),
     )
@@ -131,26 +156,26 @@ def intent_to_standard_time_params(intent: IntentSchema) -> StandardTimeAchievem
 def intent_to_root_cause_params(intent: IntentSchema) -> RootCauseParams:
     start, end = _date_range(intent)
     return RootCauseParams(
-        line_id=intent.line_id or DEFAULT_LINE_ID,
+        line_id=_line_id(intent),
         start_date=_start_of_day(start),
         end_date=_end_of_day(end),
-        yield_type=intent.yield_type,
+        yield_type=intent.yield_type or "equipment",
     )
 
 
 def intent_to_scheduling_params(intent: IntentSchema) -> SchedulingParams:
-    return SchedulingParams(line_id=intent.line_id or DEFAULT_LINE_ID)
+    return SchedulingParams(line_id=_line_id(intent))
 
 
 def intent_to_capacity_params(intent: IntentSchema) -> CapacityForecastParams:
-    return CapacityForecastParams(line_id=intent.line_id or DEFAULT_LINE_ID)
+    return CapacityForecastParams(line_id=_line_id(intent))
 
 
 def intent_to_defect_params(intent: IntentSchema) -> DefectAggregationParams:
     start, end = _date_range(intent)
     return DefectAggregationParams(
-        line_id=intent.line_id,
-        process_code=intent.process_code,
+        line_id=_strip(intent.line_id),
+        process_code=_strip(intent.process_code),
         start_date=_start_of_day(start),
         end_date=_end_of_day(end),
     )
@@ -159,8 +184,8 @@ def intent_to_defect_params(intent: IntentSchema) -> DefectAggregationParams:
 def intent_to_quality_root_cause_params(intent: IntentSchema) -> QualityRootCauseParams:
     start, end = _date_range(intent)
     return QualityRootCauseParams(
-        process_code=intent.process_code,
-        batch_lot=intent.batch_lot,
+        process_code=_strip(intent.process_code),
+        batch_lot=_strip(intent.batch_lot),
         start_date=_start_of_day(start),
         end_date=_end_of_day(end),
     )
@@ -168,40 +193,47 @@ def intent_to_quality_root_cause_params(intent: IntentSchema) -> QualityRootCaus
 
 def intent_to_error_prevention_params(intent: IntentSchema) -> ErrorPreventionParams:
     return ErrorPreventionParams(
-        process_code=intent.process_code or "",
-        model_code=intent.model_code,
+        process_code=_first_present(intent.process_code),
+        model_code=_strip(intent.model_code),
     )
 
 
 def intent_to_effectiveness_params(intent: IntentSchema) -> EffectivenessVerifyParams:
-    milestone = intent.start_date or date.today()
+    assert intent.start_date is not None
     return EffectivenessVerifyParams(
-        process_code=intent.process_code,
-        milestone_date=_start_of_day(milestone),
+        process_code=_strip(intent.process_code),
+        milestone_date=_start_of_day(intent.start_date),
     )
 
 
 def intent_to_inventory_params(intent: IntentSchema) -> InventoryStatusParams:
-    return InventoryStatusParams(wh_code=intent.wh_code, item_code=intent.item_code)
+    return InventoryStatusParams(
+        wh_code=_strip(intent.wh_code),
+        item_code=_strip(intent.item_code),
+    )
 
 
 def intent_to_inbound_outbound_params(intent: IntentSchema) -> InboundOutboundParams:
     return InboundOutboundParams(
-        wh_code=intent.wh_code or "",
-        item_code=intent.item_code or intent.product_code or "",
+        wh_code=_first_present(intent.wh_code),
+        item_code=_first_present(intent.item_code, intent.product_code),
     )
 
 
 def intent_to_obsolete_params(intent: IntentSchema) -> ObsoleteProfileParams:
-    return ObsoleteProfileParams(wh_code=intent.wh_code)
+    return ObsoleteProfileParams(wh_code=_strip(intent.wh_code))
 
 
 def intent_to_trace_forward_params(intent: IntentSchema) -> TraceForwardParams:
-    return TraceForwardParams(material_batch=intent.material_batch or intent.batch_lot or "")
+    return TraceForwardParams(
+        material_batch=_first_present(intent.material_batch, intent.batch_lot),
+    )
 
 
 def intent_to_trace_reverse_params(intent: IntentSchema) -> TraceReverseParams:
-    return TraceReverseParams(finished_lot=intent.finished_lot or intent.batch_lot or "")
+    return TraceReverseParams(
+        finished_lot=_first_present(intent.finished_lot, intent.batch_lot),
+    )
 
 
 PARAM_MAPPERS = {

@@ -14,36 +14,42 @@ def build_intent_prompt(query: str, context: MCPContext) -> str:
 Your ONLY job is to classify the user query and extract structured parameters.
 DO NOT output conversational text. DO NOT generate SQL.
 DO NOT include workshop_id or any RBAC fields in your output.
-Output ONLY a valid JSON object with these fields (omit unused):
+
+CRITICAL — entity extraction rules:
+- NEVER invent, assume, or default placeholder values for identifiers (e.g. do NOT use "L-01", "L-03", or any line unless the user explicitly stated it).
+- If a field cannot be explicitly extracted from the user's text, set it to null in JSON.
+- Only populate line_id, product_code, model_code, device_sn, batch_lot, material_batch, finished_lot, process_code, wh_code, and item_code when the user clearly mentions them.
+
+Output ONLY a valid JSON object with these fields (use null for unknown entity fields):
 {{
   "intent": "{intents}",
-  "yield_type": "equipment" | "reported",
-  "line_id": "string",
-  "start_date": "YYYY-MM-DDTHH:MM:SS",
-  "end_date": "YYYY-MM-DDTHH:MM:SS",
-  "group_by": "daily" | "hourly" | "total",
-  "metric": "sum" | "average" | "achievement_rate",
-  "analysis_type": "volatility" | "below_standard" | "peak_hourly",
-  "threshold_percentage": 90.0,
-  "period_1_start": "YYYY-MM-DDTHH:MM:SS",
-  "period_1_end": "YYYY-MM-DDTHH:MM:SS",
-  "period_2_start": "YYYY-MM-DDTHH:MM:SS",
-  "period_2_end": "YYYY-MM-DDTHH:MM:SS",
-  "product_code": "string",
-  "model_code": "string",
-  "device_sn": "string",
-  "batch_lot": "string",
-  "material_batch": "string",
-  "finished_lot": "string",
-  "process_code": "string",
-  "wh_code": "string",
-  "item_code": "string",
-  "export_format": "xlsx" | "pdf",
-  "doc_type": "sop" | "anomaly" | "solution"
+  "yield_type": "equipment" | "reported" | null,
+  "line_id": "string or null",
+  "start_date": "YYYY-MM-DDTHH:MM:SS or null",
+  "end_date": "YYYY-MM-DDTHH:MM:SS or null",
+  "group_by": "daily" | "hourly" | "total" | null,
+  "metric": "sum" | "average" | "achievement_rate" | null,
+  "analysis_type": "volatility" | "below_standard" | "peak_hourly" | null,
+  "threshold_percentage": number or null,
+  "period_1_start": "YYYY-MM-DDTHH:MM:SS or null",
+  "period_1_end": "YYYY-MM-DDTHH:MM:SS or null",
+  "period_2_start": "YYYY-MM-DDTHH:MM:SS or null",
+  "period_2_end": "YYYY-MM-DDTHH:MM:SS or null",
+  "product_code": "string or null",
+  "model_code": "string or null",
+  "device_sn": "string or null",
+  "batch_lot": "string or null",
+  "material_batch": "string or null",
+  "finished_lot": "string or null",
+  "process_code": "string or null",
+  "wh_code": "string or null",
+  "item_code": "string or null",
+  "export_format": "xlsx" | "pdf" | null,
+  "doc_type": "sop" | "anomaly" | "solution" | null
 }}
 Production intents: YIELD_AGGREGATION, YIELD_ANOMALIES, YIELD_COMPARISON,
   PRODUCTION_ROOT_CAUSE, PRODUCTION_SCHEDULING_OPT, PRODUCTION_CAPACITY_FORECAST,
-  PRODUCTION_PRODUCT_YIELD, PRODUCTION_DEVICE_RATE
+  PRODUCTION_PRODUCT_YIELD, PRODUCTION_DEVICE_RATE, PRODUCTION_STANDARD_TIME
 Quality intents: QUALITY_DEFECT_ANALYSIS, QUALITY_ROOT_CAUSE,
   QUALITY_ERROR_PREVENTION, QUALITY_EFFECTIVENESS_VERIFY
 Warehouse intents: WAREHOUSE_INVENTORY_MONITOR, WAREHOUSE_INBOUND_OUTBOUND,

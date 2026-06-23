@@ -13,7 +13,9 @@ logger = get_logger(__name__)
 async def transcribe_audio(audio_bytes: bytes, filename: str = "audio.wav") -> str:
     settings = get_settings()
     if settings.voice_mock:
-        return "Show yield anomalies on line L-01 for today"
+        return (
+            "Show total equipment yield on my production line for today"
+        )
 
     if not settings.dashscope_api_key:
         return "Voice transcription unavailable — configure DASHSCOPE_API_KEY"

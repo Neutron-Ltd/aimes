@@ -15,6 +15,7 @@ from models.schemas import IntentType, MCPContext, OrchestratorResponse
 from orchestrator.cross_module import run_cross_module_analysis
 from orchestrator.intent_utils import RAG_INTENTS, parse_intent
 from orchestrator.param_mappers import PARAM_MAPPERS
+from orchestrator.param_validation import validate_intent_params
 from orchestrator.tool_registry import get_tool_for_intent, register_all_tools
 
 logger = get_logger(__name__)
@@ -71,7 +72,16 @@ async def route_and_execute(
             metadata["rag_context"] = rag_context
 
     if intent.intent == IntentType.CROSS_MODULE_ANALYSIS:
-        params = CrossModuleParams(line_id=intent.line_id or "L-01", raw_query=query)
+        validation = validate_intent_params(intent)
+        if not validation.ok:
+            return OrchestratorResponse(
+                intent=intent,
+                tool_name="cross_module_analysis",
+                result=None,
+                message=validation.message,
+                metadata=metadata,
+            )
+        params = CrossModuleParams(line_id=intent.line_id.strip(), raw_query=query)
         result = await run_cross_module_analysis(params, context)
         return OrchestratorResponse(
             intent=intent,
@@ -110,5 +120,16 @@ async def route_and_execute(
         )
 
     tool, mapper, success_message = entry
+
+    validation = validate_intent_params(intent)
+    if not validation.ok:
+        return OrchestratorResponse(
+            intent=intent,
+            tool_name=tool.name,
+            result=None,
+            message=validation.message,
+            metadata=metadata,
+        )
+
     params = mapper(intent)
     return await _run_tool(intent, tool, params, context, success_message, metadata)
