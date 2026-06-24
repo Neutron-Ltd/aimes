@@ -16,52 +16,90 @@
 }
 
 @layer components {
+  /* Legacy alias — kept for any stray references */
   .prose-mes {
-    @apply text-sm leading-relaxed text-zinc-200;
+    @apply prose prose-sm prose-invert max-w-none prose-mes-report;
   }
 
-  .prose-mes :where(p) {
-    @apply mb-2 last:mb-0;
+  /* Two-pass Markdown report — tuned for dark MES console */
+  .prose-mes-report {
+    @apply text-sm leading-relaxed text-zinc-300;
   }
 
-  .prose-mes :where(h1, h2, h3, h4) {
-    @apply mb-2 mt-3 font-semibold text-zinc-100 first:mt-0;
+  .prose-mes-report :where(p) {
+    @apply mb-2.5 last:mb-0;
   }
 
-  .prose-mes :where(ul, ol) {
-    @apply mb-2 ml-4 list-disc;
+  .prose-mes-report :where(h1) {
+    @apply mb-3 mt-4 text-base font-bold text-zinc-50 first:mt-0;
   }
 
-  .prose-mes :where(code) {
-    @apply rounded bg-zinc-800 px-1 py-0.5 font-mono text-xs text-emerald-300;
+  .prose-mes-report :where(h2) {
+    @apply mb-2 mt-4 border-b border-zinc-800 pb-1 text-sm font-semibold text-zinc-100 first:mt-0;
   }
 
-  .prose-mes :where(pre) {
-    @apply mb-2 overflow-x-auto rounded-lg bg-zinc-900 p-3 font-mono text-xs;
+  .prose-mes-report :where(h3, h4) {
+    @apply mb-1.5 mt-3 text-sm font-semibold text-zinc-200 first:mt-0;
   }
 
-  .prose-mes :where(pre code) {
+  .prose-mes-report :where(ul, ol) {
+    @apply mb-2.5 ml-4 space-y-1;
+  }
+
+  .prose-mes-report :where(ul) {
+    @apply list-disc;
+  }
+
+  .prose-mes-report :where(ol) {
+    @apply list-decimal;
+  }
+
+  .prose-mes-report :where(li) {
+    @apply pl-0.5;
+  }
+
+  .prose-mes-report :where(strong) {
+    @apply font-semibold text-zinc-100;
+  }
+
+  .prose-mes-report :where(code):not(:where(pre *)) {
+    @apply rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-xs text-emerald-300;
+  }
+
+  .prose-mes-report :where(pre) {
+    @apply mb-3 overflow-x-auto rounded-lg border border-zinc-800 bg-zinc-950 p-3 font-mono text-xs;
+  }
+
+  .prose-mes-report :where(pre code) {
     @apply bg-transparent p-0 text-zinc-300;
   }
 
-  .prose-mes :where(table) {
-    @apply mb-2 w-full border-collapse text-xs;
+  .prose-mes-report :where(table) {
+    @apply mb-3 w-full border-collapse text-xs;
   }
 
-  .prose-mes :where(th, td) {
-    @apply border border-zinc-700 px-2 py-1;
+  .prose-mes-report :where(th, td) {
+    @apply border border-zinc-700 px-2.5 py-1.5;
   }
 
-  .prose-mes :where(th) {
-    @apply bg-zinc-800 font-medium;
+  .prose-mes-report :where(th) {
+    @apply bg-zinc-800/80 font-medium text-zinc-200;
   }
 
-  .prose-mes :where(a) {
-    @apply text-sky-400 underline hover:text-sky-300;
+  .prose-mes-report :where(td) {
+    @apply text-zinc-300;
   }
 
-  .prose-mes :where(blockquote) {
-    @apply border-l-2 border-zinc-600 pl-3 italic text-zinc-400;
+  .prose-mes-report :where(a) {
+    @apply text-sky-400 underline decoration-sky-600/50 underline-offset-2 hover:text-sky-300;
+  }
+
+  .prose-mes-report :where(blockquote) {
+    @apply my-2 border-l-2 border-sky-700/50 bg-zinc-900/40 py-1 pl-3 italic text-zinc-400;
+  }
+
+  .prose-mes-report :where(hr) {
+    @apply my-4 border-zinc-800;
   }
 }
 

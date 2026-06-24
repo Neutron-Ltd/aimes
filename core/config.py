@@ -15,7 +15,7 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    app_name: str = "NEUTRON MES AI Assistant"
+    app_name: str = "MES AI Assistant"
     app_version: str = "0.3.0"
     debug: bool = False
 

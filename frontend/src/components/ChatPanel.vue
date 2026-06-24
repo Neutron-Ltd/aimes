@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue'
-import { marked } from 'marked'
-import DOMPurify from 'dompurify'
-import { Send, Mic, MicOff, Loader2, Bot, User, ChevronDown, ChevronRight } from 'lucide-vue-next'
+import { ref, computed, watch, nextTick, defineAsyncComponent } from 'vue'
+import { Send, Mic, MicOff, Loader2, Bot, User } from 'lucide-vue-next'
 import type { AppConfig, ChatMessage } from '../types/api'
-import RawJsonViewer from './RawJsonViewer.vue'
+import MarkdownContent from './MarkdownContent.vue'
+import { shouldShowChart } from '../utils/chartData'
+
+const ResultChart = defineAsyncComponent(() => import('./ResultChart.vue'))
 
 const props = defineProps<{
   config: AppConfig
@@ -21,44 +22,12 @@ const emit = defineEmits<{
 const inputText = ref('')
 const messagesEndRef = ref<HTMLElement | null>(null)
 const isRecording = ref(false)
-const expandedIds = ref<Set<string>>(new Set())
 
 let mediaRecorder: MediaRecorder | null = null
 let audioChunks: Blob[] = []
 
-marked.setOptions({
-  breaks: true,
-  gfm: true,
-})
-
-function renderMarkdown(text: string): string {
-  const raw = marked.parse(text, { async: false }) as string
-  return DOMPurify.sanitize(raw)
-}
-
-function responseWrapper(msg: ChatMessage): Record<string, unknown> | null {
-  if (!msg.response) return null
-  const r = msg.response
-  return {
-    intent: r.intent,
-    tool_name: r.tool_name,
-    result: r.result,
-    metadata: r.metadata,
-  }
-}
-
-function toggleAccordion(id: string) {
-  const next = new Set(expandedIds.value)
-  if (next.has(id)) {
-    next.delete(id)
-  } else {
-    next.add(id)
-  }
-  expandedIds.value = next
-}
-
-function isExpanded(id: string) {
-  return expandedIds.value.has(id)
+function hasChartableResult(msg: ChatMessage): boolean {
+  return msg.role === 'assistant' && shouldShowChart(msg.response?.result ?? null)
 }
 
 function formatTime(date: Date) {
@@ -143,7 +112,6 @@ watch(
   },
 )
 
-/** Allow parent to populate input via exposed ref */
 defineExpose({
   setInput(value: string) {
     inputText.value = value
@@ -210,33 +178,19 @@ defineExpose({
               <time class="ml-auto text-[10px] opacity-40">{{ formatTime(msg.timestamp) }}</time>
             </div>
 
-            <!-- Content -->
-            <div
+            <!-- Markdown report (two-pass synthesis from backend) -->
+            <MarkdownContent
               v-if="msg.role === 'assistant'"
-              class="prose-mes"
-              v-html="renderMarkdown(msg.content)"
+              :content="msg.content"
             />
             <p v-else class="text-sm leading-relaxed">{{ msg.content }}</p>
 
-            <!-- Under-the-hood accordion for AI responses -->
+            <!-- Optional chart when result data supports visualization -->
             <div
-              v-if="msg.role === 'assistant' && responseWrapper(msg)"
+              v-if="msg.role === 'assistant' && hasChartableResult(msg)"
               class="mt-3 border-t border-zinc-700/60 pt-3"
             >
-              <button
-                type="button"
-                class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium text-zinc-400 transition-colors hover:bg-zinc-800/60 hover:text-zinc-200"
-                @click="toggleAccordion(msg.id)"
-              >
-                <component
-                  :is="isExpanded(msg.id) ? ChevronDown : ChevronRight"
-                  class="h-3.5 w-3.5 shrink-0"
-                />
-                <span>🛠️ Inspect Under-the-Hood Data</span>
-              </button>
-              <div v-show="isExpanded(msg.id)" class="mt-2">
-                <RawJsonViewer :data="responseWrapper(msg)!" />
-              </div>
+              <ResultChart :result="msg.response!.result" />
             </div>
           </div>
         </div>

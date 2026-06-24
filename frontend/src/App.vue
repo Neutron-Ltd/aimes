@@ -35,21 +35,24 @@ function buildHeaders(): HeadersInit {
   return headers
 }
 
+function formatIntent(intent: QueryResponse['intent']): string {
+  if (typeof intent === 'string') return intent
+  if (intent && typeof intent === 'object' && 'intent' in intent) {
+    return String((intent as { intent?: unknown }).intent ?? '—')
+  }
+  return '—'
+}
+
 function extractSchemaTables(result: QueryResponse['result']): string[] {
   if (result == null) return []
 
   const tables = new Set<string>()
 
-  if (Array.isArray(result)) {
-    tables.add(`array[${result.length}]`)
-    if (result.length > 0 && typeof result[0] === 'object' && result[0] !== null) {
-      Object.keys(result[0] as object).forEach((k) => tables.add(k))
-    }
-  } else if (typeof result === 'object') {
+  if (typeof result === 'object') {
     Object.entries(result).forEach(([key, val]) => {
       tables.add(key)
-      if (Array.isArray(val)) {
-        tables.add(`${key}[]`)
+      if (Array.isArray(val) && val.length > 0 && typeof val[0] === 'object' && val[0] !== null) {
+        Object.keys(val[0] as object).forEach((k) => tables.add(`${key}.${k}`))
       }
     })
   }
@@ -61,10 +64,9 @@ function appendEventLog(response: QueryResponse) {
   if (response.result == null) return
 
   const hasPayload =
-    (Array.isArray(response.result) && response.result.length > 0) ||
-    (typeof response.result === 'object' &&
-      response.result !== null &&
-      Object.keys(response.result).length > 0)
+    typeof response.result === 'object' &&
+    response.result !== null &&
+    Object.keys(response.result).length > 0
 
   if (!hasPayload && !response.tool_name) return
 
@@ -81,7 +83,7 @@ function appendEventLog(response: QueryResponse) {
   eventLog.value.push({
     id: uid(),
     timestamp: new Date(),
-    intent: response.intent || '—',
+    intent: formatIntent(response.intent),
     toolName: response.tool_name || '—',
     schemaTables: extractSchemaTables(response.result),
     resultPreview: preview,

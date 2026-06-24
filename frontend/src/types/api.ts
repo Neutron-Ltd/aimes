@@ -12,11 +12,33 @@ export interface QueryRequest {
 
 /** Standard query response from POST /api/v1/query and /api/v1/query/voice */
 export interface QueryResponse {
-  intent: string
-  tool_name: string
-  result: Record<string, unknown> | unknown[] | null
+  intent: string | Record<string, unknown>
+  tool_name: string | null
+  result: QueryResultPayload | null
   message: string
   metadata: Record<string, unknown>
+  transcript?: string | null
+}
+
+/** Structured MCP tool output — drives charts and debug accordion */
+export interface QueryResultPayload {
+  value?: number
+  defect_rate?: number
+  metric?: string
+  breakdown?: BreakdownRow[]
+  [key: string]: unknown
+}
+
+/** Single row inside result.breakdown time-series or category arrays */
+export interface BreakdownRow {
+  bucket?: string | null
+  date?: string | null
+  value?: number
+  defect_rate?: number
+  process_code?: string
+  inspected?: number
+  defects?: number
+  [key: string]: unknown
 }
 
 /** Chat message displayed in the UI */

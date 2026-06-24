@@ -1,12 +1,13 @@
 """
 F0.3 — LLM Orchestrator (Intent Router).
 
-Pipeline: parse_intent → RAG enrichment → tool registry dispatch.
+Pipeline: parse_intent → RAG enrichment → MCP dispatch → synthesis report.
 """
 
 from __future__ import annotations
 
-from core.config import get_settings
+from typing import Any, Optional
+
 from core.logging import get_logger
 from core.rag.retriever import retrieve_context
 from mcp_tools.base import MCPToolResult
@@ -16,23 +17,46 @@ from orchestrator.cross_module import run_cross_module_analysis
 from orchestrator.intent_utils import RAG_INTENTS, parse_intent
 from orchestrator.param_mappers import PARAM_MAPPERS
 from orchestrator.param_validation import validate_intent_params
+from orchestrator.report_generator import COMPANION_GREETING, _fallback_markdown_report, generate_ai_analysis
 from orchestrator.tool_registry import get_tool_for_intent, register_all_tools
 
 logger = get_logger(__name__)
 
 register_all_tools(PARAM_MAPPERS)
 
+# Intents that return guidance only — skip second-pass synthesis
+_NO_SYNTHESIS_INTENTS = frozenset(
+    {
+        IntentType.UNKNOWN,
+        IntentType.EXPORT_REPORT,
+    }
+)
+
+
+async def _synthesize_message(
+    query: str,
+    db_result: dict[str, Any],
+    rag_context: Optional[str],
+) -> str:
+    """Run second-pass LLM synthesis with formatted fallback on any failure."""
+    try:
+        return await generate_ai_analysis(query, db_result, rag_context)
+    except Exception:
+        logger.exception("Synthesis pipeline failed unexpectedly")
+        return _fallback_markdown_report(query, db_result, reason="synthesis pipeline error")
+
 
 async def _run_tool(
+    query: str,
     intent_schema,
     tool,
     params,
     context: MCPContext,
-    success_message: str,
     metadata: dict | None = None,
 ) -> OrchestratorResponse:
     tool_result: MCPToolResult = await tool.run(params, context)
     meta = metadata or {}
+    rag_context = meta.get("rag_context")
 
     if not tool_result.success:
         return OrchestratorResponse(
@@ -43,11 +67,17 @@ async def _run_tool(
             metadata=meta,
         )
 
+    report = await _synthesize_message(
+        query,
+        tool_result.data,
+        rag_context,
+    )
+
     return OrchestratorResponse(
         intent=intent_schema,
         tool_name=tool.name,
         result=tool_result.data,
-        message=success_message,
+        message=report,
         metadata=meta,
     )
 
@@ -81,30 +111,35 @@ async def route_and_execute(
                 metadata=metadata,
             )
         params = CrossModuleParams(line_id=intent.line_id.strip(), raw_query=query)
-        result = await run_cross_module_analysis(params, context)
+        cross_result = await run_cross_module_analysis(params, context)
+        result_dict = cross_result.model_dump(mode="json")
+        report = await _synthesize_message(
+            query,
+            result_dict,
+            metadata.get("rag_context"),
+        )
         return OrchestratorResponse(
             intent=intent,
             tool_name="cross_module_analysis",
-            result=result.model_dump(mode="json"),
-            message=result.summary,
+            result=result_dict,
+            message=report,
             metadata=metadata,
         )
 
-    if intent.intent == IntentType.EXPORT_REPORT:
-        return OrchestratorResponse(
-            intent=intent,
-            tool_name=None,
-            result={"export_format": intent.export_format or "xlsx", "hint": "POST /api/v1/export"},
-            message="Use POST /api/v1/export with the orchestrator result payload.",
-            metadata=metadata,
-        )
-
-    if intent.intent == IntentType.UNKNOWN:
+    if intent.intent in _NO_SYNTHESIS_INTENTS:
+        if intent.intent == IntentType.EXPORT_REPORT:
+            return OrchestratorResponse(
+                intent=intent,
+                tool_name=None,
+                result={"export_format": intent.export_format or "xlsx", "hint": "POST /api/v1/export"},
+                message="Use POST /api/v1/export with the orchestrator result payload.",
+                metadata=metadata,
+            )
         return OrchestratorResponse(
             intent=intent,
             tool_name=None,
             result=None,
-            message="Could not determine intent. Please rephrase your MES question.",
+            message=COMPANION_GREETING,
             metadata=metadata,
         )
 
@@ -118,7 +153,7 @@ async def route_and_execute(
             metadata=metadata,
         )
 
-    tool, mapper, success_message = entry
+    tool, mapper, _ = entry
 
     validation = validate_intent_params(intent)
     if not validation.ok:
@@ -131,4 +166,4 @@ async def route_and_execute(
         )
 
     params = mapper(intent)
-    return await _run_tool(intent, tool, params, context, success_message, metadata)
+    return await _run_tool(query, intent, tool, params, context, metadata)

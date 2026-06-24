@@ -33,6 +33,11 @@ async def health() -> dict[str, str]:
     "/query",
     response_model=OrchestratorResponse,
     summary="Route natural-language query through intent orchestrator",
+    description=(
+        "Two-pass pipeline: (1) intent extraction + MCP SQL execution, "
+        "(2) Bailian synthesis of a Markdown analysis report in `message`. "
+        "Raw tool output remains in `result`."
+    ),
 )
 async def query_orchestrator(
     body: OrchestratorRequest,
@@ -46,6 +51,7 @@ async def query_orchestrator(
     "/query/voice",
     response_model=OrchestratorResponse,
     summary="Voice query — transcribe audio then route through orchestrator",
+    description="Same two-pass synthesis as `/query`; `transcript` holds the speech-to-text input.",
 )
 async def query_voice(
     request: Request,

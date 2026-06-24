@@ -133,10 +133,18 @@ class OrchestratorRequest(BaseModel):
 
 
 class OrchestratorResponse(BaseModel):
+    """API response: structured MCP payload plus human-readable Markdown narrative."""
+
     intent: IntentSchema
     tool_name: Optional[str] = None
-    result: Optional[dict[str, Any]] = None
-    message: str = ""
+    result: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Raw structured JSON from the MCP tool (for widgets, export, debugging)",
+    )
+    message: str = Field(
+        default="",
+        description="Primary user-facing Markdown report synthesized from result data",
+    )
     metadata: dict[str, Any] = Field(default_factory=dict)
     transcript: Optional[str] = None
 
