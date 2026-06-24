@@ -1,0 +1,80 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #app {
+    @apply h-full overflow-hidden;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+
+  * {
+    @apply border-zinc-800;
+  }
+}
+
+@layer components {
+  .prose-mes {
+    @apply text-sm leading-relaxed text-zinc-200;
+  }
+
+  .prose-mes :where(p) {
+    @apply mb-2 last:mb-0;
+  }
+
+  .prose-mes :where(h1, h2, h3, h4) {
+    @apply mb-2 mt-3 font-semibold text-zinc-100 first:mt-0;
+  }
+
+  .prose-mes :where(ul, ol) {
+    @apply mb-2 ml-4 list-disc;
+  }
+
+  .prose-mes :where(code) {
+    @apply rounded bg-zinc-800 px-1 py-0.5 font-mono text-xs text-emerald-300;
+  }
+
+  .prose-mes :where(pre) {
+    @apply mb-2 overflow-x-auto rounded-lg bg-zinc-900 p-3 font-mono text-xs;
+  }
+
+  .prose-mes :where(pre code) {
+    @apply bg-transparent p-0 text-zinc-300;
+  }
+
+  .prose-mes :where(table) {
+    @apply mb-2 w-full border-collapse text-xs;
+  }
+
+  .prose-mes :where(th, td) {
+    @apply border border-zinc-700 px-2 py-1;
+  }
+
+  .prose-mes :where(th) {
+    @apply bg-zinc-800 font-medium;
+  }
+
+  .prose-mes :where(a) {
+    @apply text-sky-400 underline hover:text-sky-300;
+  }
+
+  .prose-mes :where(blockquote) {
+    @apply border-l-2 border-zinc-600 pl-3 italic text-zinc-400;
+  }
+}
+
+/* Custom scrollbar for manufacturing console aesthetic */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-zinc-900;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply rounded-full bg-zinc-700 hover:bg-zinc-600;
+}

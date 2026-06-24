@@ -4,7 +4,9 @@ Enterprise Manufacturing Execution System (MES) AI Assistant backend for the **N
 
 **Stack:** Python 3.10+, FastAPI, Pydantic v2, SQLAlchemy 2.0 (async), asyncpg, dashscope (Bailian SDK).
 
-**Current version:** `0.3.0` — RAG pipeline, expanded MCP tools (Production/Quality/Warehouse), voice/export/cross-module utilities
+**Current version:** `0.3.0` — RAG pipeline, 18 MCP tools (Production/Quality/Warehouse), voice/export/cross-module utilities, global DB access (no workshop row-level filtering).
+
+**Debugging reference:** [docs/mesai-mcp-1.1.md](docs/mesai-mcp-1.1.md) (tool SQL, schemas, known mismatches) · [docs/mesai-query-1.1.md](docs/mesai-query-1.1.md) (real test IDs and date ranges)
 
 ---
 
@@ -15,8 +17,9 @@ Enterprise Manufacturing Execution System (MES) AI Assistant backend for the **N
 | **No Text-to-SQL** | Enforced | LLM extracts parameters only. MCP tools run predefined `sqlalchemy.text()` queries. |
 | **Intent routing (Feature 1.2)** | Done | `parse_intent()` → Bailian `dashscope.Application.call` → `IntentSchema` |
 | **API-first testing** | Done | Swagger UI at `/docs` (root `/` redirects here), ReDoc at `/redoc` |
-| **RBAC context injection (Feature 13.1)** | Done | `RBACMiddleware` injects `workshop_id`; MCP tools filter on `data_auth` |
+| **Param validation** | Done | `orchestrator/param_validation.py` blocks dispatch when required entities are missing (no dummy `L-01` fallbacks) |
 | **Math safeguard (Feature 5.2)** | Done | `core/math_safeguard.py` — std dev and growth rates computed in Python |
+| **Global data access** | Done | No `data_auth` / workshop filtering in MCP SQL; queries match on line, device, dates, product codes only |
 
 ---
 
@@ -26,28 +29,35 @@ Enterprise Manufacturing Execution System (MES) AI Assistant backend for the **N
 sequenceDiagram
     participant User as Swagger_UI
     participant API as POST_/api/v1/query
-    participant RBAC as RBACMiddleware
+    participant MW as RequestContextMiddleware
     participant Bailian as dashscope.Application
     participant Router as route_and_execute
-    participant MCP as production_tools
+    participant Validate as param_validation
+    participant MCP as MCP_tools
     participant DB as PostgreSQL
 
-    User->>API: query + X-MES-Workshop-Id
-    API->>RBAC: inject MCPContext
-    RBAC->>Router: route_and_execute
+    User->>API: query JSON body
+    API->>MW: empty MCPContext
+    MW->>Router: route_and_execute
     Router->>Bailian: asyncio.to_thread Application.call
     Bailian-->>Router: JSON intent params
-    Router->>MCP: tool.run params context
-    MCP->>DB: parameterized SQL
-    DB-->>MCP: raw rows
-    MCP-->>User: OrchestratorResponse
+    Router->>Validate: required entities
+    alt missing line_id etc
+        Validate-->>User: message only (no DB call)
+    else ok
+        Validate->>MCP: tool.run params
+        MCP->>DB: parameterized SQL (no data_auth filter)
+        DB-->>MCP: raw rows
+        MCP-->>User: OrchestratorResponse
+    end
 ```
 
-1. User sends `POST /api/v1/query` with a natural-language `query` and optional RBAC headers.
-2. `RBACMiddleware` injects `MCPContext` (`workshop_id`, etc.) into `request.state`.
+1. User sends `POST /api/v1/query` with a natural-language `query` (no auth headers required).
+2. `RBACMiddleware` injects an empty `MCPContext` placeholder (headers are ignored for data scoping).
 3. `parse_intent(query, context)` calls Bailian asynchronously and returns `IntentSchema`.
-4. `route_and_execute()` switches on `IntentType` and calls the matching Phase 2 MCP tool.
-5. MCP tool queries PostgreSQL, computes statistics in Python, returns JSON to the client.
+4. `validate_intent_params()` returns a user-facing message if required fields (e.g. `line_id`, `device_sn`) are missing.
+5. `route_and_execute()` maps intent → Pydantic params via `param_mappers.py` and runs the matching MCP tool.
+6. MCP tool queries PostgreSQL globally, computes statistics in Python, returns JSON.
 
 **Intent routing map (v0.3 — 18 tools):**
 
@@ -58,7 +68,7 @@ sequenceDiagram
 | Warehouse | `warehouse_inventory_monitor`, `warehouse_trace_forward` | `get_inventory_status`, `trace_material_forward`, … |
 | System | `cross_module_analysis`, `export_report` | `cross_module_analysis`, `POST /export` |
 
-RAG context is attached to `metadata.rag_context` for anomaly/root-cause intents when `enrich_response=true`.
+RAG context is attached to `metadata.rag_context` for anomaly/root-cause intents when `enrich_response=true` (global vector search, not workshop-scoped).
 
 ---
 
@@ -81,7 +91,6 @@ Open **http://127.0.0.1:8000/** (redirects to Swagger) or **http://127.0.0.1:800
 | `DATABASE_URL` | Yes | Async PostgreSQL DSN: `postgresql+asyncpg://user:pass@host:5432/mes_db` |
 | `DASHSCOPE_API_KEY` | Yes* | Alibaba DashScope API key for Bailian intent extraction |
 | `BAILIAN_APP_ID` | Yes* | Bailian Application ID from Model Studio |
-| `DEFAULT_WORKSHOP_ID` | No | Fallback workshop when no `X-MES-Workshop-Id` header (default: `WS-001`) |
 | `DB_POOL_SIZE` | No | Connection pool size (default: `5`) |
 | `DEBUG` | No | Enable SQL echo, Bailian raw response logging, and tool result debug logs |
 | `RAG_BACKEND` | No | `pgvector` \| `chroma` \| file fallback (default: `chroma` → file) |
@@ -105,7 +114,8 @@ mesai/
 │   ├── rag/                    # store, ingest, retriever
 │   ├── analytics/              # root_cause, scheduling, capacity
 │   ├── export/                 # excel, pdf
-│   └── voice/                  # transcribe
+│   ├── voice/                  # transcribe
+│   └── security.py             # request context middleware (no RBAC enforcement)
 ├── models/intents/             # production, quality, warehouse, system
 ├── mcp_tools/
 │   ├── production_tools.py     # 6 production tools
@@ -114,10 +124,11 @@ mesai/
 │   └── warehouse_tools.py      # 5 warehouse tools
 ├── orchestrator/
 │   ├── router.py               # slim dispatcher
-│   ├── tool_registry.py        # intent → tool map
-│   ├── param_mappers.py
+│   ├── tool_registry.py        # intent → tool map (18 tools)
+│   ├── param_mappers.py        # IntentSchema → tool params
+│   ├── param_validation.py     # required-entity checks before DB
 │   ├── intent_prompt.py
-│   ├── intent_utils.py
+│   ├── intent_utils.py         # parse_intent, Bailian call
 │   └── cross_module.py
 └── db/migrations/001_rag_pgvector.sql
 ```
@@ -131,7 +142,7 @@ mesai/
 | Symbol | Purpose |
 |---|---|
 | `lifespan()` | `setup_logging()` → `init_db()` on startup; `close_db()` on shutdown |
-| `create_app()` | FastAPI app + `RBACMiddleware` + API router + `/` → `/docs` redirect |
+| `create_app()` | FastAPI app + request context middleware + API router + `/` → `/docs` redirect |
 | `app` | ASGI instance for uvicorn |
 
 ---
@@ -141,18 +152,12 @@ mesai/
 | Endpoint | Method | Description |
 |---|---|---|
 | `/api/v1/health` | GET | Liveness + version |
-| `/api/v1/query` | POST | NL query → Bailian → MCP tool |
+| `/api/v1/query` | POST | NL query → Bailian → validate → MCP tool |
 | `/api/v1/query/voice` | POST | Audio upload → transcribe → query |
-| `/api/v1/rag/ingest` | POST | Ingest SOP/anomaly/solution into RAG |
+| `/api/v1/rag/ingest` | POST | Ingest SOP/anomaly/solution into RAG (global index) |
 | `/api/v1/export` | POST | Export result as xlsx or pdf |
 
-**Swagger headers for RBAC simulation:**
-
-| Header | Purpose |
-|---|---|
-| `X-MES-Workshop-Id` | Workshop scope → `data_auth` in DB queries |
-| `X-MES-User-Id` | Optional user identity |
-| `X-MES-Permission-Level` | Optional permission level (default: `operator`) |
+No headers are required for data access. `X-MES-Workshop-Id` and related headers are accepted by Swagger for compatibility but **do not filter database queries**.
 
 ---
 
@@ -160,9 +165,7 @@ mesai/
 
 All settings load from `.env` via Pydantic `BaseSettings`. `get_settings()` is a cached singleton.
 
-Key fields: `database_url`, `dashscope_api_key`, `bailian_app_id`, `default_workshop_id`, `db_pool_size`, `debug`.
-
-If `.env` defines `DATABASE_URL`, it overrides the built-in default DSN in `config.py`.
+Key fields: `database_url`, `dashscope_api_key`, `bailian_app_id`, `db_pool_size`, `debug`, `rag_backend`.
 
 ---
 
@@ -177,15 +180,11 @@ SQLAlchemy 2.0 async connection pool.
 | `get_db()` | FastAPI dependency — yields `AsyncSession` per request |
 | `get_session()` | Standalone session for MCP tool execution |
 
-Invalid `DATABASE_URL` (e.g. non-numeric port) is caught at startup with a clear log message.
-
 ---
 
-### `core/security.py` — RBAC (Feature 13.1)
+### `core/security.py` — Request Context
 
-`RBACMiddleware` reads MES headers and stores `MCPContext` on `request.state.mes_context`. `get_mes_context(request)` retrieves it in route handlers.
-
-Production path (future): JWT/session → MES roles → `workshop_id`.
+`RBACMiddleware` injects an empty `MCPContext()` on every request. Workshop and permission headers are not read for query scoping. `get_mes_context(request)` returns the placeholder context for route handlers.
 
 ---
 
@@ -194,7 +193,7 @@ Production path (future): JWT/session → MES roles → `workshop_id`.
 | Function | Formula | Used by |
 |---|---|---|
 | `population_std_dev(values)` | σ = √(Σ(x − μ)² / N) | `get_yield_anomalies_and_peaks` (`volatility`) |
-| `period_over_period_growth_rate(current, past)` | ((current − past) / past) × 100 | `compare_yield_periods` |
+| `period_over_period_growth_rate(current, past)` | ((current − past) / past) × 100 | `compare_yield_periods`, quality effectiveness |
 
 ---
 
@@ -202,27 +201,29 @@ Production path (future): JWT/session → MES roles → `workshop_id`.
 
 | Model / Enum | Purpose |
 |---|---|
-| `IntentType` | `yield_aggregation`, `yield_anomalies`, `yield_comparison`, `unknown` |
+| `IntentType` | All 18+ intents including production, quality, warehouse, system |
 | `BailianIntentExtraction` | Strict Pydantic model for raw Bailian JSON before mapping |
-| `IntentSchema` | Bailian output: intent, dates, line_id, yield_type, group_by, metric, etc. |
-| `MCPContext` | RBAC: `workshop_id`, `user_id`, `permission_level` |
-| `OrchestratorRequest` | `{ "query": "..." }` |
-| `OrchestratorResponse` | `{ intent, tool_name, result, message }` |
+| `IntentSchema` | Bailian output: intent, dates, line_id, device_sn, yield_type, group_by, metric, etc. |
+| `MCPContext` | Placeholder context (`workshop_id` optional, unused for DB filtering) |
+| `OrchestratorRequest` | `{ "query": "...", "enrich_response": true }` |
+| `OrchestratorResponse` | `{ intent, tool_name, result, message, metadata }` |
 
-Phase 2 tool param/result models live in `mcp_tools/production_tools.py`.
+Tool param/result models live in `mcp_tools/production_tools.py` and `models/intents/`.
 
 ---
 
-### `mcp_tools/production_tools.py` — Phase 2 Tool Arsenal
+### `mcp_tools/production_tools.py` — Production MCP Tools
 
-Three token-optimized tools. All SQL via `sqlalchemy.text()` with bound parameters.
+Six tools. All SQL via `sqlalchemy.text()` with bound parameters. **No `data_auth` filters.**
 
-#### Database table routing
+#### Yield table routing
 
-| `yield_type` | Table(s) | Line filter | Qty | Time column |
+| `yield_type` | Table(s) | Scope filter | Qty | Time column |
 |---|---|---|---|---|
-| `equipment` | `t_smt_program_consumption_record` | `area_sn = :line_id` | `finish_qty` | `create_time` |
+| `equipment` | `t_smt_program_consumption_record` | `device_sn = :device_sn` **or** `device_sn IN (SELECT … FROM t_co_device WHERE cd_location = :line_id)` | `finish_qty` / `mount_sheet_qty` | `create_time` |
 | `reported` | `t_wip_detail` JOIN `t_co_area` ×2 | `line.area_sn = :line_id` | `pro_qty − ng_qty − scrap_qty` | `COALESCE(in_time, create_time)` |
+
+**Important:** `t_smt_program_consumption_record.area_sn` is often `NULL` in live machine logs — equipment yield must **not** filter on `eq.area_sn`. Use `t_co_device.cd_location` or direct `device_sn`.
 
 **Reported yield join** (workstation → line hierarchy):
 
@@ -230,8 +231,15 @@ Three token-optimized tools. All SQL via `sqlalchemy.text()` with bound paramete
 n2admin.t_wip_detail wd
 JOIN n2admin.t_co_area ws ON wd.work_stationsn = ws.area_sn
 JOIN n2admin.t_co_area line ON ws.parent_sn = line.area_sn
-WHERE line.area_sn = :line_id AND wd.data_auth = :workshop_id
+WHERE line.area_sn = :line_id
 ```
+
+#### Yield validation (`param_validation.py`)
+
+| `yield_type` | Required scope |
+|---|---|
+| `reported` | `line_id` |
+| `equipment` | `line_id` **or** `device_sn` |
 
 #### Tools
 
@@ -240,23 +248,35 @@ WHERE line.area_sn = :line_id AND wd.data_auth = :workshop_id
 | `get_yield_aggregation` | `get_yield_aggregation_tool` | Sum, average, achievement rate (daily/hourly/total) |
 | `get_yield_anomalies_and_peaks` | `get_yield_anomalies_tool` | Volatility, below-standard, peak hourly |
 | `compare_yield_periods` | `compare_yield_periods_tool` | Period-over-period totals + growth rate |
+| `get_product_yield` | `get_product_yield_tool` | Product yield per line + `t_co_item` metadata |
+| `get_device_production_rate` | `get_device_production_rate_tool` | Avg rate via `t_co_device` join |
+| `get_standard_time_achievement` | `get_standard_time_achievement_tool` | Actual vs `t_co_standard_time` goal |
 
 Achievement rates and growth rates are computed in Python (`_compute_metric`, `math_safeguard`), not by the LLM.
 
 ---
 
-### `orchestrator/router.py` — Intent Router (F0.2 + Feature 1.2)
+### `mcp_tools/production_engines.py` — Analytics Engines
 
-| Function | Purpose |
+| Tool | Engine | Notes |
+|---|---|---|
+| `get_production_root_cause` | `core/analytics/root_cause.py` | Uses `wd.operator`; equipment join via `t_co_device` |
+| `optimize_production_schedule` | `core/analytics/scheduling.py` | `t_aps_plan_mo_info` (no `mo.status` column) |
+| `forecast_capacity_hr` | `core/analytics/capacity.py` | Historical throughput via `t_co_device` bridge |
+
+---
+
+### `orchestrator/` — Intent Pipeline
+
+| File | Role |
 |---|---|
-| `parse_intent(query, context)` | Async Bailian call → `IntentSchema` |
-| `_build_intent_prompt(query, context)` | Structured JSON extraction prompt |
-| `_strip_markdown_json(text)` | Remove `` ```json ... ``` `` wrappers |
-| `_normalize_intent(raw)` | Map `YIELD_AGGREGATION` → `IntentType.YIELD_AGGREGATION` |
-| `_ai_payload_to_intent_schema(data, query)` | Bailian JSON → `IntentSchema` |
-| `_fallback_intent(query, reason)` | `UNKNOWN` on missing credentials, API error, bad JSON |
-| `_intent_to_*_params(intent)` | Map `IntentSchema` → tool param models |
-| `route_and_execute(query, context)` | Full pipeline: Bailian → MCP tool → response |
+| `intent_utils.py` | `parse_intent()` — async Bailian call, JSON strip, `IntentSchema` mapping |
+| `intent_prompt.py` | Bailian extraction prompt (no workshop/RBAC fields in output) |
+| `param_validation.py` | Per-intent required-field validators; returns message before DB on failure |
+| `param_mappers.py` | `IntentSchema` → tool Pydantic params |
+| `tool_registry.py` | Registers all 18 `IntentType` → tool + mapper + success message |
+| `router.py` | `route_and_execute()` — parse → RAG → validate → dispatch |
+| `cross_module.py` | Parallel production + quality + warehouse snapshot |
 
 **Bailian call pattern:**
 
@@ -269,18 +289,20 @@ response = await asyncio.to_thread(
 )
 ```
 
-`workshop_id` always comes from RBAC middleware — never from AI output.
+Entity IDs (`line_id`, `device_sn`, etc.) come from Bailian extraction only — never invented by the backend.
 
 ---
 
 ## MES Database Reference
 
 - **Database:** `mes_db`
-- **Schema:** `n2admin`
+- **Schema:** `n2admin` (frozen — fixes are application-layer only)
 - **Full export:** `db/schema.sql`
 - **Read-only user:** configured via `DATABASE_URL`
 
-Key tables: `t_smt_program_consumption_record`, `t_wip_detail`, `t_co_area`.
+Key tables: `t_smt_program_consumption_record`, `t_wip_detail`, `t_co_area`, `t_co_device`, `t_qm_inspect_info`, `t_wms_stock_info`.
+
+**Real identifiers** (not placeholders like `L-01`): see [docs/mesai-query-1.1.md](docs/mesai-query-1.1.md) — e.g. line `FDQ-SMT-3`, device `BB-SMT-029`, equipment dates `2026-05-09`–`2026-06-21`.
 
 ---
 
@@ -288,9 +310,10 @@ Key tables: `t_smt_program_consumption_record`, `t_wip_detail`, `t_co_area`.
 
 1. Read-only PostgreSQL user via `DATABASE_URL`
 2. No Text-to-SQL — SQL is hardcoded in MCP tools
-3. RBAC — `data_auth = :workshop_id` from middleware, not user free text
+3. **Global query scope** — MCP tools do not filter on `data_auth` or workshop headers
 4. Parameterized queries only (`:named` bind params)
-5. Secrets in `.env` (gitignored); `.env.example` as template
+5. Param validation prevents execution with missing critical entities (no fake default line IDs)
+6. Secrets in `.env` (gitignored); `.env.example` as template
 
 ---
 
@@ -315,31 +338,36 @@ Key tables: `t_smt_program_consumption_record`, `t_wip_detail`, `t_co_area`.
 
 ### Phase 1 — Core Orchestration (Complete)
 - [x] Modular FastAPI structure
-- [x] RBAC middleware prep
+- [x] Request context middleware
 - [x] Swagger UI endpoint
 
-### Phase 2 — Production Data Analysis, I.1 (Complete)
+### Phase 2 — Production Data Analysis (Complete)
 - [x] Async SQLAlchemy + asyncpg
-- [x] Three production MCP tools with table routing
+- [x] Production MCP tools with table routing
 - [x] `t_wip_detail` ↔ `t_co_area` join for reported yield
 - [x] Mathematical safeguard layer
 
 ### v0.3 — Full Backend Upgrade (Complete)
 - [x] RAG pipeline (pgvector + file fallback) + `/api/v1/rag/ingest`
-- [x] Tool registry + param mappers (18 MCP tools)
+- [x] Tool registry + param mappers + param validation (18 MCP tools)
 - [x] Production extensions (`t_co_item`, `t_co_device`, `t_co_standard_time`) + analytics engines
 - [x] Quality module (4 tools → `t_qm_*`)
 - [x] Warehouse module (5 tools → `t_wms_*`)
 - [x] Voice query, export xlsx/pdf, cross-module analysis
+- [x] Schema/SQL alignment fixes (equipment `t_co_device` bridge, QM 8D joins, warehouse area lookup)
+- [x] Global data access (RBAC row-level filtering removed)
 
 ### Known Gaps
 
 | Item | Status |
 |---|---|
-| JWT / MES auth | Headers simulate RBAC |
+| `get_standard_time_achievement` | Still filters `eq.area_sn` — often NULL; needs `t_co_device` bridge |
+| `check_error_prevention` | SQL columns don't match physical QM scheme/IPQC schema |
 | `t_co_area` deep hierarchy | One-level `parent_sn` join; may need recursive CTE |
 | Unit tests | No `tests/` directory |
 | Vue.js frontend | API-first via Swagger |
+
+See [docs/mesai-mcp-1.1.md](docs/mesai-mcp-1.1.md) §5 for full mismatch tracking.
 
 ---
 
@@ -351,30 +379,29 @@ curl http://127.0.0.1:8000/api/v1/health
 ```
 
 ### Natural-language queries (Bailian + DB required)
+
+Use real line/device IDs and in-range dates from [docs/mesai-query-1.1.md](docs/mesai-query-1.1.md). No workshop header required.
+
 ```bash
-# Aggregation
+# Equipment yield by line
 curl -X POST http://127.0.0.1:8000/api/v1/query \
   -H "Content-Type: application/json" \
-  -H "X-MES-Workshop-Id: WS-042" \
-  -d '{"query": "Total equipment yield on line L-03 for today"}'
+  -d '{"query": "Total equipment yield on line FDQ-SMT-3 for 2026-06-20"}'
 
-# Anomalies
+# Equipment yield by device
 curl -X POST http://127.0.0.1:8000/api/v1/query \
   -H "Content-Type: application/json" \
-  -H "X-MES-Workshop-Id: WS-042" \
-  -d '{"query": "Show volatility on line L-01 this week"}'
-
-# RAG ingest (Swagger)
-curl -X POST http://127.0.0.1:8000/api/v1/rag/ingest \
-  -H "Content-Type: application/json" \
-  -H "X-MES-Workshop-Id: WS-042" \
-  -d '{"doc_type": "anomaly", "text": "Line L-01 dip caused by feeder jam on device SN-42"}'
+  -d '{"query": "Equipment yield for device BB-SMT-029 on 2026-06-20"}'
 
 # Cross-module analysis
 curl -X POST http://127.0.0.1:8000/api/v1/query \
   -H "Content-Type: application/json" \
-  -H "X-MES-Workshop-Id: WS-042" \
-  -d '{"query": "Cross-module analysis for line L-01"}'
+  -d '{"query": "Cross-module analysis for line FDQ-SMT-3"}'
+
+# RAG ingest
+curl -X POST http://127.0.0.1:8000/api/v1/rag/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"doc_type": "anomaly", "text": "FDQ-SMT-3 dip caused by feeder jam on device BB-SMT-029"}'
 ```
 
 ### Direct MCP tool invocation (bypasses Bailian)
@@ -391,13 +418,13 @@ from models.schemas import MCPContext
 async def test():
     params = YieldAggregationParams(
         yield_type=YieldType.EQUIPMENT,
-        line_id="L-01",
-        start_date=datetime(2026, 1, 1),
-        end_date=datetime(2026, 1, 31),
+        line_id="FDQ-SMT-3",
+        start_date=datetime(2026, 6, 20),
+        end_date=datetime(2026, 6, 21),
         group_by=GroupBy.DAILY,
         metric=Metric.SUM,
     )
-    result = await get_yield_aggregation_tool.run(params, MCPContext(workshop_id="WS-001"))
+    result = await get_yield_aggregation_tool.run(params, MCPContext())
     print(result)
 
 asyncio.run(test())
@@ -412,7 +439,9 @@ asyncio.run(test())
 | `invalid literal for int() with base 10: 'port'` | `DATABASE_URL` has literal `host:port` placeholder | Set real host and numeric port in `.env` |
 | `intent: unknown` on every query | Missing `DASHSCOPE_API_KEY` or `BAILIAN_APP_ID` | Add Bailian credentials to `.env` |
 | `intent: unknown`, API error in logs | Invalid Bailian key/app ID or API timeout | Verify credentials in Alibaba Model Studio |
-| MCP tool DB errors | DB unreachable or wrong `workshop_id` | Check `DATABASE_URL` and `X-MES-Workshop-Id` header |
+| Empty `value: 0` or `[]` results | Wrong line ID (`L-01`), out-of-range dates, or schema mismatch | Use IDs from `mesai-query-1.1.md`; see `mesai-mcp-1.1.md` §5 |
+| Validation message, no DB call | Missing `line_id` / `device_sn` / etc. in user query | Rephrase with explicit line or device |
+| MCP tool DB errors | DB unreachable | Check `DATABASE_URL` connectivity |
 | `GET /` returns 404 | Old server without root redirect | Pull latest `main.py`; `/` redirects to `/docs` |
 
 ---
