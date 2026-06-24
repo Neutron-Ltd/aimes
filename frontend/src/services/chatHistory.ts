@@ -71,7 +71,16 @@ export async function loadChatHistory(config: AppConfig): Promise<ChatMessage[]>
   })
 
   if (!res.ok) {
-    throw new Error(`HTTP ${res.status}`)
+    let detail = `HTTP ${res.status}`
+    try {
+      const body = await res.json()
+      if (body && typeof body === 'object' && 'detail' in body) {
+        detail = String((body as { detail: unknown }).detail)
+      }
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail)
   }
 
   const data = (await res.json()) as { messages: ServerChatRecord[] }
@@ -92,7 +101,16 @@ export async function saveChatMessage(config: AppConfig, msg: ChatMessage): Prom
   })
 
   if (!res.ok) {
-    throw new Error(`HTTP ${res.status}`)
+    let detail = `HTTP ${res.status}`
+    try {
+      const body = await res.json()
+      if (body && typeof body === 'object' && 'detail' in body) {
+        detail = String((body as { detail: unknown }).detail)
+      }
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail)
   }
 }
 
@@ -106,6 +124,15 @@ export async function clearChatHistory(config: AppConfig): Promise<void> {
   })
 
   if (!res.ok) {
-    throw new Error(`HTTP ${res.status}`)
+    let detail = `HTTP ${res.status}`
+    try {
+      const body = await res.json()
+      if (body && typeof body === 'object' && 'detail' in body) {
+        detail = String((body as { detail: unknown }).detail)
+      }
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail)
   }
 }

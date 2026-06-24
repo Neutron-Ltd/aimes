@@ -24,11 +24,19 @@ import {
 
 const { t } = useI18n()
 
+import {
+  loadStoredConfig,
+  saveStoredConfig,
+  defaultWorkshopId,
+} from './utils/appConfigStorage'
+
+const stored = loadStoredConfig()
+
 const config = ref<AppConfig>({
-  baseURL: import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000',
-  workshopId: '',
-  enrichResponse: true,
-  locale: getAppLocale(),
+  baseURL: stored.baseURL ?? import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000',
+  workshopId: stored.workshopId ?? defaultWorkshopId(),
+  enrichResponse: stored.enrichResponse ?? true,
+  locale: stored.locale ?? getAppLocale(),
 })
 
 const messages = ref<ChatMessage[]>([])
@@ -94,10 +102,17 @@ function appendEventLog(response: QueryResponse) {
 }
 
 async function persistMessage(msg: ChatMessage) {
+  if (!config.value.workshopId.trim()) {
+    historyBanner.value = t('settings.historyWarning')
+    return
+  }
   try {
     await saveChatMessage(config.value, msg)
-  } catch {
-    historyBanner.value = t('chat.historySaveFailed')
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : ''
+    historyBanner.value = detail
+      ? `${t('chat.historySaveFailed')} (${detail})`
+      : t('chat.historySaveFailed')
   }
 }
 
@@ -223,6 +238,19 @@ watch(
   () => {
     hydrateHistory()
   },
+)
+
+watch(
+  config,
+  (value) => {
+    saveStoredConfig({
+      baseURL: value.baseURL,
+      workshopId: value.workshopId,
+      enrichResponse: value.enrichResponse,
+      locale: value.locale,
+    })
+  },
+  { deep: true },
 )
 
 onMounted(() => {

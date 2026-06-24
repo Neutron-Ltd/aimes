@@ -78,28 +78,28 @@ export type HealthStatus = 'healthy' | 'unhealthy' | 'checking'
 export interface QuickChip {
   id: string
   labelKey: string
-  query: string
+  queryKey: string
 }
 
 export const QUICK_CHIPS: QuickChip[] = [
   {
     id: 'chip-a',
     labelKey: 'chips.lineYield',
-    query: 'Total equipment yield on line FDQ-SMT-3 for 2026-06-20',
+    queryKey: 'chips.lineYieldQuery',
   },
   {
     id: 'chip-b',
     labelKey: 'chips.deviceYield',
-    query: 'Equipment yield for device BB-SMT-029 on 2026-06-20',
+    queryKey: 'chips.deviceYieldQuery',
   },
   {
     id: 'chip-c',
     labelKey: 'chips.crossModule',
-    query: 'Cross-module analysis for line FDQ-SMT-3',
+    queryKey: 'chips.crossModuleQuery',
   },
   {
     id: 'chip-d',
     labelKey: 'chips.obsoleteInventory',
-    query: 'Profile obsolete inventory older than 90 days',
+    queryKey: 'chips.obsoleteInventoryQuery',
   },
 ]

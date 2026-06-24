@@ -59,7 +59,7 @@ async function checkHealth() {
 }
 
 function onChipClick(chip: QuickChip) {
-  emit('chip-click', chip.query)
+  emit('chip-click', t(chip.queryKey))
 }
 
 function formatTime(date: Date) {
@@ -143,7 +143,7 @@ onUnmounted(() => {
             {{ t(chip.labelKey) }}
           </span>
           <span class="mt-0.5 block max-w-xs truncate font-mono text-[10px] text-zinc-500">
-            {{ chip.query }}
+            {{ t(chip.queryKey) }}
           </span>
         </button>
       </div>

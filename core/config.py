@@ -42,6 +42,12 @@ class Settings(BaseSettings):
 
     voice_mock: bool = Field(default=True, validation_alias="VOICE_MOCK")
 
+    chat_db_path: str = Field(
+        default="./data/chat_history.db",
+        validation_alias="CHAT_DB_PATH",
+        description="SQLite file for per-workshop chat history (writable, separate from MES PostgreSQL)",
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:

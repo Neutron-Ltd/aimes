@@ -60,6 +60,10 @@ export default {
     deviceYield: '设备 BB-SMT-029 产量',
     crossModule: '跨模块 FDQ-SMT-3',
     obsoleteInventory: '超 90 天呆滞库存',
+    lineYieldQuery: 'FDQ-SMT-3 产线 2026-06-20 的设备总产量',
+    deviceYieldQuery: 'BB-SMT-029 设备 2026-06-20 的产量',
+    crossModuleQuery: 'FDQ-SMT-3 产线跨模块分析',
+    obsoleteInventoryQuery: '超过 90 天的呆滞库存分析',
   },
   errors: {
     requestFailed: '请求失败：{detail}',

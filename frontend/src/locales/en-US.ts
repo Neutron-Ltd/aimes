@@ -60,6 +60,10 @@ export default {
     deviceYield: 'Device BB-SMT-029 Yield',
     crossModule: 'Cross-Module FDQ-SMT-3',
     obsoleteInventory: 'Obsolete Inventory 90d',
+    lineYieldQuery: 'Total equipment yield on line FDQ-SMT-3 for 2026-06-20',
+    deviceYieldQuery: 'Equipment yield for device BB-SMT-029 on 2026-06-20',
+    crossModuleQuery: 'Cross-module analysis for line FDQ-SMT-3',
+    obsoleteInventoryQuery: 'Profile obsolete inventory older than 90 days',
   },
   errors: {
     requestFailed: 'Request failed: {detail}',

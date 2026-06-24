@@ -1,66 +1,136 @@
-"""Server-side chat message persistence scoped by workshop ID."""
+"""Server-side chat message persistence scoped by workshop ID (local SQLite)."""
 
 from __future__ import annotations
 
+import asyncio
 import json
+import sqlite3
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 
-from sqlalchemy import text
-
-from core.db import get_session
+from core.config import get_settings
 from core.logging import get_logger
 
 logger = get_logger(__name__)
 
-_LIST_SQL = text("""
-    SELECT id, workshop_id, role, content, response_json, created_at
-    FROM n2admin.chat_messages
-    WHERE workshop_id = :workshop_id
-    ORDER BY created_at ASC
-""")
-
-_INSERT_SQL = text("""
-    INSERT INTO n2admin.chat_messages (id, workshop_id, role, content, response_json, created_at)
-    VALUES (:id, :workshop_id, :role, :content, :response_json, :created_at)
-    RETURNING id, workshop_id, role, content, response_json, created_at
-""")
-
-_DELETE_SQL = text("""
-    DELETE FROM n2admin.chat_messages
-    WHERE workshop_id = :workshop_id
-""")
+_CREATE_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id TEXT PRIMARY KEY,
+    workshop_id TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'error')),
+    content TEXT NOT NULL,
+    response_json TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_workshop_created
+    ON chat_messages (workshop_id, created_at);
+"""
 
 
-def _row_to_dict(row: Any) -> dict[str, Any]:
-    response_json = row.get("response_json")
-    if isinstance(response_json, str):
+def _db_path() -> Path:
+    settings = get_settings()
+    path = Path(getattr(settings, "chat_db_path", "./data/chat_history.db"))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _connect() -> sqlite3.Connection:
+    conn = sqlite3.connect(_db_path(), check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.executescript(_CREATE_TABLE_SQL)
+    return conn
+
+
+def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+    response_json = row["response_json"]
+    parsed: Optional[dict[str, Any]] = None
+    if response_json:
         try:
-            response_json = json.loads(response_json)
+            parsed = json.loads(response_json)
         except json.JSONDecodeError:
-            response_json = None
+            parsed = None
     return {
-        "id": str(row["id"]),
+        "id": row["id"],
         "workshop_id": row["workshop_id"],
         "role": row["role"],
         "content": row["content"],
-        "response_json": response_json,
-        "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
+        "response_json": parsed,
+        "created_at": row["created_at"],
     }
 
 
-async def list_messages(workshop_id: str) -> list[dict[str, Any]]:
-    session = await get_session()
+def _list_messages_sync(workshop_id: str) -> list[dict[str, Any]]:
+    conn = _connect()
     try:
-        result = await session.execute(_LIST_SQL, {"workshop_id": workshop_id})
-        rows = result.mappings().all()
-        return [_row_to_dict(dict(r)) for r in rows]
+        rows = conn.execute(
+            """
+            SELECT id, workshop_id, role, content, response_json, created_at
+            FROM chat_messages
+            WHERE workshop_id = ?
+            ORDER BY created_at ASC
+            """,
+            (workshop_id,),
+        ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def _append_message_sync(
+    workshop_id: str,
+    role: str,
+    content: str,
+    response_json: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    conn = _connect()
+    try:
+        msg_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        payload = json.dumps(response_json) if response_json is not None else None
+        conn.execute(
+            """
+            INSERT INTO chat_messages (id, workshop_id, role, content, response_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (msg_id, workshop_id, role, content, payload, now),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT id, workshop_id, role, content, response_json, created_at FROM chat_messages WHERE id = ?",
+            (msg_id,),
+        ).fetchone()
+        return _row_to_dict(row) if row else {}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _clear_history_sync(workshop_id: str) -> int:
+    conn = _connect()
+    try:
+        cur = conn.execute(
+            "DELETE FROM chat_messages WHERE workshop_id = ?",
+            (workshop_id,),
+        )
+        conn.commit()
+        return cur.rowcount
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+async def list_messages(workshop_id: str) -> list[dict[str, Any]]:
+    try:
+        return await asyncio.to_thread(_list_messages_sync, workshop_id)
     except Exception:
         logger.exception("Failed to list chat messages for workshop=%s", workshop_id)
         raise
-    finally:
-        await session.close()
 
 
 async def append_message(
@@ -69,42 +139,18 @@ async def append_message(
     content: str,
     response_json: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
-    session = await get_session()
     try:
-        msg_id = str(uuid.uuid4())
-        now = datetime.utcnow()
-        payload = json.dumps(response_json) if response_json is not None else None
-        result = await session.execute(
-            _INSERT_SQL,
-            {
-                "id": msg_id,
-                "workshop_id": workshop_id,
-                "role": role,
-                "content": content,
-                "response_json": payload,
-                "created_at": now,
-            },
+        return await asyncio.to_thread(
+            _append_message_sync, workshop_id, role, content, response_json
         )
-        await session.commit()
-        row = result.mappings().first()
-        return _row_to_dict(dict(row)) if row else {}
     except Exception:
-        await session.rollback()
         logger.exception("Failed to append chat message for workshop=%s", workshop_id)
         raise
-    finally:
-        await session.close()
 
 
 async def clear_history(workshop_id: str) -> int:
-    session = await get_session()
     try:
-        result = await session.execute(_DELETE_SQL, {"workshop_id": workshop_id})
-        await session.commit()
-        return result.rowcount or 0
+        return await asyncio.to_thread(_clear_history_sync, workshop_id)
     except Exception:
-        await session.rollback()
         logger.exception("Failed to clear chat history for workshop=%s", workshop_id)
         raise
-    finally:
-        await session.close()
