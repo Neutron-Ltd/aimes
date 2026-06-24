@@ -58,7 +58,7 @@ function updateField<K extends keyof AppConfig>(key: K, value: AppConfig[K]) {
             <input
               :value="config.baseURL"
               type="url"
-              placeholder="http://127.0.0.1:8000"
+              placeholder="(empty = same host, e.g. Docker/nginx)"
               class="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-xs text-zinc-200 placeholder:text-zinc-600 focus:border-sky-600 focus:outline-none focus:ring-1 focus:ring-sky-600"
               @input="updateField('baseURL', ($event.target as HTMLInputElement).value)"
             />

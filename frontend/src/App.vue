@@ -11,7 +11,7 @@ import type {
 } from './types/api'
 
 const config = ref<AppConfig>({
-  baseURL: 'http://127.0.0.1:8000',
+  baseURL: import.meta.env.VITE_API_BASE_URL || '',
   workshopId: '',
   enrichResponse: true,
 })
