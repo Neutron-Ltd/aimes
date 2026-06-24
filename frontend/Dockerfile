@@ -1,5 +1,5 @@
-ARG NODE_IMAGE=registry.cn-hangzhou.aliyuncs.com/library/node:22-alpine
-ARG NGINX_IMAGE=registry.cn-hangzhou.aliyuncs.com/library/nginx:1.27-alpine
+ARG NODE_IMAGE=docker.m.daocloud.io/library/node:22-alpine
+ARG NGINX_IMAGE=docker.m.daocloud.io/library/nginx:1.27-alpine
 
 FROM ${NODE_IMAGE} AS build
 

@@ -1,5 +1,6 @@
-# Use Alibaba mirror on CN servers; override for local dev: --build-arg PYTHON_IMAGE=python:3.12-slim-bookworm
-ARG PYTHON_IMAGE=registry.cn-hangzhou.aliyuncs.com/library/python:3.12-slim-bookworm
+# Override base images via build-arg or docker-compose .env (see .env.example).
+# Default uses DaoCloud pull-through cache (works on many CN servers without Docker Hub).
+ARG PYTHON_IMAGE=docker.m.daocloud.io/library/python:3.12-slim-bookworm
 FROM ${PYTHON_IMAGE}
 
 WORKDIR /app
