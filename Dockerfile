@@ -1,4 +1,6 @@
-FROM python:3.12-slim-bookworm
+# Use Alibaba mirror on CN servers; override for local dev: --build-arg PYTHON_IMAGE=python:3.12-slim-bookworm
+ARG PYTHON_IMAGE=registry.cn-hangzhou.aliyuncs.com/library/python:3.12-slim-bookworm
+FROM ${PYTHON_IMAGE}
 
 WORKDIR /app
 
@@ -6,7 +8,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir \
+    -i https://mirrors.aliyun.com/pypi/simple/ \
+    --trusted-host mirrors.aliyun.com \
+    -r requirements.txt
 
 COPY api/ api/
 COPY core/ core/

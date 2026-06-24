@@ -1,9 +1,13 @@
-FROM node:22-alpine AS build
+ARG NODE_IMAGE=registry.cn-hangzhou.aliyuncs.com/library/node:22-alpine
+ARG NGINX_IMAGE=registry.cn-hangzhou.aliyuncs.com/library/nginx:1.27-alpine
+
+FROM ${NODE_IMAGE} AS build
 
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm config set registry https://registry.npmmirror.com \
+    && npm ci
 
 COPY . .
 
@@ -12,7 +16,7 @@ ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 
 RUN npm run build
 
-FROM nginx:1.27-alpine
+FROM ${NGINX_IMAGE}
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
