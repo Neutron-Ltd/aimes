@@ -235,7 +235,7 @@ defineExpose({
             <p v-else class="text-sm leading-relaxed">{{ msg.content }}</p>
 
             <button
-              v-if="msg.role === 'error'"
+              v-if="msg.role === 'error' && msg.retryable !== false"
               type="button"
               class="mt-2 flex items-center gap-1.5 rounded-md border border-red-700/50 px-2 py-1 text-xs text-red-200 transition-colors hover:bg-red-900/30"
               @click="emit('retry')"

@@ -146,10 +146,53 @@ async function addErrorMessage(content: string, retryable = true) {
     role: 'error',
     content,
     timestamp: new Date(),
+    retryable,
   }
   messages.value.push(msg)
   await persistMessage(msg)
-  return retryable
+}
+
+function isVoicePlaceholder(content: string): boolean {
+  return content === t('chat.voiceSubmitted')
+}
+
+/** Resolve the user query to re-run when retry is clicked. */
+function resolveRetryQuery(): string | null {
+  if (lastQuery.value?.trim()) return lastQuery.value.trim()
+
+  for (let i = messages.value.length - 1; i >= 0; i--) {
+    const msg = messages.value[i]
+    if (msg.role === 'user' && !isVoicePlaceholder(msg.content)) {
+      return msg.content
+    }
+  }
+  return null
+}
+
+function syncLastQueryFromHistory() {
+  const query = resolveRetryQuery()
+  if (query) lastQuery.value = query
+}
+
+async function runQuery(query: string, options: { addUserBubble: boolean }) {
+  if (loading.value) return
+
+  lastQuery.value = query
+  if (options.addUserBubble) {
+    await addUserMessage(query)
+  }
+
+  loading.value = true
+  const result = await apiExecuteTextQuery(config.value, query)
+
+  if (!result.ok) {
+    const message = formatApiError(result.error, t, 'errors.requestFailed')
+    await addErrorMessage(message, result.error.retryable)
+  } else {
+    await addAssistantMessage(result.data)
+  }
+
+  loading.value = false
 }
 
 async function hydrateHistory() {
@@ -161,28 +204,14 @@ async function hydrateHistory() {
 
   try {
     messages.value = await loadChatHistory(config.value)
+    syncLastQueryFromHistory()
   } catch {
     historyBanner.value = t('chat.historyLoadFailed')
   }
 }
 
 async function executeTextQuery(query: string) {
-  if (loading.value) return
-
-  lastQuery.value = query
-  await addUserMessage(query)
-  loading.value = true
-
-  const result = await apiExecuteTextQuery(config.value, query)
-
-  if (!result.ok) {
-    const message = formatApiError(result.error, t, 'errors.requestFailed')
-    await addErrorMessage(message, result.error.retryable)
-  } else {
-    await addAssistantMessage(result.data)
-  }
-
-  loading.value = false
+  await runQuery(query, { addUserBubble: true })
 }
 
 async function executeVoiceQuery(blob: Blob) {
@@ -209,9 +238,18 @@ async function onMicError(message: string) {
 }
 
 async function onRetry() {
-  if (lastQuery.value) {
-    await executeTextQuery(lastQuery.value)
+  const query = resolveRetryQuery()
+  if (!query || loading.value) return
+
+  // Drop trailing error bubble(s) so retry replaces the failed attempt visually
+  while (
+    messages.value.length > 0 &&
+    messages.value[messages.value.length - 1]?.role === 'error'
+  ) {
+    messages.value.pop()
   }
+
+  await runQuery(query, { addUserBubble: false })
 }
 
 async function onClearHistory() {

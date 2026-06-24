@@ -49,6 +49,8 @@ export interface ChatMessage {
   timestamp: Date
   /** Full API response wrapper for assistant messages */
   response?: QueryResponse
+  /** Whether the error bubble should offer retry (false for mic permission errors, etc.) */
+  retryable?: boolean
 }
 
 /** Event log entry when backend returns structured result data */
