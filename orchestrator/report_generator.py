@@ -10,6 +10,7 @@ from typing import Any, Callable, Optional
 
 import dashscope
 
+from orchestrator.prompts.synthesis import build_synthesis_prompt
 from core.config import get_settings
 from core.logging import get_logger
 
@@ -21,7 +22,7 @@ SYNTHESIS_TIMEOUT_SECONDS = 120
 # Companion / greeting copy
 # ---------------------------------------------------------------------------
 
-COMPANION_GREETING = """Hello! I am your **MES AI Assistant**. I can help you monitor live production metrics, analyze quality defects, or trace warehouse inventory lines.
+COMPANION_GREETING_EN = """Hello! I am your **MES AI Assistant**. I can help you monitor live production metrics, analyze quality defects, or trace warehouse inventory lines.
 
 ---
 
@@ -35,6 +36,28 @@ COMPANION_GREETING = """Hello! I am your **MES AI Assistant**. I can help you mo
 ---
 
 How can I assist your production floor today?"""
+
+COMPANION_GREETING_ZH = """您好！我是 **MES AI 助手**，可以帮您监控实时生产指标、分析质量缺陷或追溯仓库库存。
+
+---
+
+### 您可以这样问我：
+
+- *查询设备 BB-SMT-029 本周的设备产量*
+- *注塑工序当前的缺陷率是多少？*
+- *对成品批次 ABC-2026-001 进行反向追溯*
+- *对比产线 FDQ-SMT-3 上周与本周的设备产量*
+
+---
+
+今天需要我协助车间处理什么问题？"""
+
+# Backward-compatible alias
+COMPANION_GREETING = COMPANION_GREETING_EN
+
+
+def get_companion_greeting(locale: str = "zh-CN") -> str:
+    return COMPANION_GREETING_ZH if locale == "zh-CN" else COMPANION_GREETING_EN
 
 
 # ---------------------------------------------------------------------------
@@ -306,20 +329,24 @@ def _fallback_markdown_report(
     query: str,
     db_result: dict[str, Any],
     reason: Optional[str] = None,
+    locale: str = "zh-CN",
 ) -> str:
     """Deterministic executive-style report when Bailian synthesis is unavailable."""
     _ = query  # retained for logging/call-site compatibility; never echoed to users
+    zh = locale == "zh-CN"
 
     lines = [
-        "### Operational Analysis Report",
+        "### 运营分析报告" if zh else "### Operational Analysis Report",
         "",
-        "*MES AI Assistant — automated summary*",
+        "*MES AI 助手 — 自动摘要*" if zh else "*MES AI Assistant — automated summary*",
         "",
     ]
 
     if reason:
         lines.extend([
-            "> *Full narrative generation was temporarily unavailable. "
+            "> *完整叙述生成暂时不可用。以下结构化发现直接来自实时 MES 记录。*"
+            if zh
+            else "> *Full narrative generation was temporarily unavailable. "
             "The structured findings below are drawn directly from live MES records.*",
             "",
         ])
@@ -329,21 +356,29 @@ def _fallback_markdown_report(
 
     if not db_result or _result_is_zero_or_empty(db_result):
         lines.extend([
-            "### Findings",
+            "### 发现" if zh else "### Findings",
             "",
-            "No matching transaction records were found in the database log history "
+            "在数据库日志历史中未找到与所提供参数匹配的交易记录。"
+            if zh
+            else "No matching transaction records were found in the database log history "
             "for the parameters supplied.",
             "",
-            "**Recommended next steps**",
+            "**建议后续步骤**" if zh else "**Recommended next steps**",
             "",
-            "- Confirm the production line, machine serial, or product code spelling",
-            "- Widen the date range (equipment logs typically span recent production weeks)",
-            "- Rephrase with a specific metric, e.g. yield, defect rate, or inventory status",
+            "- 确认产线、设备序列号或产品编码拼写正确"
+            if zh
+            else "- Confirm the production line, machine serial, or product code spelling",
+            "- 扩大日期范围（设备日志通常覆盖最近几周的生产数据）"
+            if zh
+            else "- Widen the date range (equipment logs typically span recent production weeks)",
+            "- 使用具体指标重新表述，例如产量、缺陷率或库存状态"
+            if zh
+            else "- Rephrase with a specific metric, e.g. yield, defect rate, or inventory status",
             "",
         ])
         return "\n".join(lines)
 
-    lines.extend(["### Key Metrics", ""])
+    lines.extend(["### 关键指标" if zh else "### Key Metrics", ""])
 
     skip_keys = {
         "breakdown",
@@ -430,50 +465,11 @@ def _fallback_markdown_report(
     return "\n".join(lines)
 
 
-def build_synthesis_prompt(
-    query: str,
-    db_result: dict[str, Any],
-    rag_context: Optional[str] = None,
-) -> str:
-    result_json = json.dumps(db_result, indent=2, default=str)
-    rag_block = rag_context.strip() if rag_context else "(No supplementary knowledge-base context available.)"
-
-    return f"""You are a Senior Manufacturing Data Analyst for an enterprise MES (Manufacturing Execution System).
-
-Your task is to interpret structured database query results and write a clear, professional Markdown report for production, quality, or warehouse stakeholders.
-
-## User question
-{query}
-
-## Structured database result (JSON)
-```json
-{result_json}
-```
-
-## Background knowledge (RAG)
-{rag_block}
-
-## Instructions
-1. Act as an expert analyst — explain what the numbers mean in plain language, not just restate them.
-2. Highlight actionable insights: unusual drops, peak periods, threshold breaches, empty inventory, defect spikes, scheduling risks, traceability gaps, etc.
-3. Use professional Markdown: a concise title (`##`), short executive summary, bullet points for key findings, and a brief recommendations section when appropriate.
-4. Reference specific values from the JSON (dates, line IDs, quantities, rates, device serials) when they support your conclusions.
-5. If the result is empty, zero, or contains no matching records, politely explain that no transaction records match that combination in the database log history. Suggest what the user might adjust (date range, line ID, device serial, product code).
-6. Do NOT invent data that is not present in the JSON or RAG context.
-7. Do NOT echo the user's raw question back at the top of the report.
-8. Do NOT expose raw JSON keys or snake_case field names — use plain manufacturing language (e.g. "Target Equipment" not "device_sn").
-9. Do NOT output raw JSON blocks in your final answer — only human-readable Markdown.
-10. Format time-series breakdowns as Markdown tables when present.
-11. Keep the report focused (roughly 150–400 words unless the dataset is large).
-
-Write the Markdown report now:
-"""
-
-
 async def generate_ai_analysis(
     query: str,
     db_result: dict[str, Any],
     rag_context: Optional[str] = None,
+    locale: str = "zh-CN",
 ) -> str:
     """
     Second-pass Bailian call: convert MCP tool output into a Markdown narrative.
@@ -487,9 +483,10 @@ async def generate_ai_analysis(
             query,
             db_result,
             reason="Bailian credentials not configured",
+            locale=locale,
         )
 
-    prompt_text = build_synthesis_prompt(query, db_result, rag_context)
+    prompt_text = build_synthesis_prompt(query, db_result, rag_context, locale)
 
     try:
         response = await asyncio.wait_for(
@@ -505,11 +502,11 @@ async def generate_ai_analysis(
         if response.status_code != HTTPStatus.OK:
             message = getattr(response, "message", "Unknown Bailian API error")
             logger.warning("Synthesis Bailian error: %s", message)
-            return _fallback_markdown_report(query, db_result, reason=message)
+            return _fallback_markdown_report(query, db_result, reason=message, locale=locale)
 
         output_text = (response.output.text or "").strip()
         if not output_text:
-            return _fallback_markdown_report(query, db_result, reason="empty response")
+            return _fallback_markdown_report(query, db_result, reason="empty response", locale=locale)
 
         if settings.debug:
             logger.debug("Bailian synthesis response: %s", output_text[:500])
@@ -518,7 +515,7 @@ async def generate_ai_analysis(
 
     except asyncio.TimeoutError:
         logger.warning("Bailian synthesis timed out after %ss", SYNTHESIS_TIMEOUT_SECONDS)
-        return _fallback_markdown_report(query, db_result, reason="synthesis timeout")
+        return _fallback_markdown_report(query, db_result, reason="synthesis timeout", locale=locale)
     except Exception as exc:
         logger.exception("Unexpected error during Bailian synthesis")
-        return _fallback_markdown_report(query, db_result, reason=str(exc))
+        return _fallback_markdown_report(query, db_result, reason=str(exc), locale=locale)

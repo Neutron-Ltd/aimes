@@ -17,7 +17,7 @@ from orchestrator.cross_module import run_cross_module_analysis
 from orchestrator.intent_utils import RAG_INTENTS, parse_intent
 from orchestrator.param_mappers import PARAM_MAPPERS
 from orchestrator.param_validation import validate_intent_params
-from orchestrator.report_generator import COMPANION_GREETING, _fallback_markdown_report, generate_ai_analysis
+from orchestrator.report_generator import _fallback_markdown_report, generate_ai_analysis, get_companion_greeting
 from orchestrator.tool_registry import get_tool_for_intent, register_all_tools
 
 logger = get_logger(__name__)
@@ -37,13 +37,14 @@ async def _synthesize_message(
     query: str,
     db_result: dict[str, Any],
     rag_context: Optional[str],
+    locale: str = "zh-CN",
 ) -> str:
     """Run second-pass LLM synthesis with formatted fallback on any failure."""
     try:
-        return await generate_ai_analysis(query, db_result, rag_context)
+        return await generate_ai_analysis(query, db_result, rag_context, locale)
     except Exception:
         logger.exception("Synthesis pipeline failed unexpectedly")
-        return _fallback_markdown_report(query, db_result, reason="synthesis pipeline error")
+        return _fallback_markdown_report(query, db_result, reason="synthesis pipeline error", locale=locale)
 
 
 async def _run_tool(
@@ -53,6 +54,7 @@ async def _run_tool(
     params,
     context: MCPContext,
     metadata: dict | None = None,
+    locale: str = "zh-CN",
 ) -> OrchestratorResponse:
     tool_result: MCPToolResult = await tool.run(params, context)
     meta = metadata or {}
@@ -71,6 +73,7 @@ async def _run_tool(
         query,
         tool_result.data,
         rag_context,
+        locale,
     )
 
     return OrchestratorResponse(
@@ -86,8 +89,9 @@ async def route_and_execute(
     query: str,
     context: MCPContext,
     enrich_response: bool = True,
+    locale: str = "zh-CN",
 ) -> OrchestratorResponse:
-    intent = await parse_intent(query, context)
+    intent = await parse_intent(query, context, locale)
     logger.info(
         "Parsed intent=%s line=%s",
         intent.intent,
@@ -117,6 +121,7 @@ async def route_and_execute(
             query,
             result_dict,
             metadata.get("rag_context"),
+            locale,
         )
         return OrchestratorResponse(
             intent=intent,
@@ -139,7 +144,7 @@ async def route_and_execute(
             intent=intent,
             tool_name=None,
             result=None,
-            message=COMPANION_GREETING,
+            message=get_companion_greeting(locale),
             metadata=metadata,
         )
 
@@ -166,4 +171,4 @@ async def route_and_execute(
         )
 
     params = mapper(intent)
-    return await _run_tool(query, intent, tool, params, context, metadata)
+    return await _run_tool(query, intent, tool, params, context, metadata, locale)

@@ -130,6 +130,31 @@ class OrchestratorRequest(BaseModel):
         default=True,
         description="When true, attach RAG context to response metadata",
     )
+    locale: str = Field(
+        default="zh-CN",
+        pattern="^(zh-CN|en-US)$",
+        description="Locale for synthesized Markdown report (zh-CN or en-US)",
+    )
+
+
+class ChatMessageCreate(BaseModel):
+    role: str = Field(..., pattern="^(user|assistant|error)$")
+    content: str = Field(..., min_length=1)
+    response_json: Optional[dict[str, Any]] = None
+
+
+class ChatMessageRecord(BaseModel):
+    id: str
+    workshop_id: str
+    role: str
+    content: str
+    response_json: Optional[dict[str, Any]] = None
+    created_at: Optional[str] = None
+
+
+class ChatHistoryResponse(BaseModel):
+    workshop_id: str
+    messages: list[ChatMessageRecord]
 
 
 class OrchestratorResponse(BaseModel):

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { Activity, Database, Zap } from 'lucide-vue-next'
 import type { AppConfig, EventLogEntry, HealthStatus, QuickChip } from '../types/api'
 import { QUICK_CHIPS } from '../types/api'
@@ -14,12 +15,16 @@ const emit = defineEmits<{
   'chip-click': [query: string]
 }>()
 
+const { t, locale } = useI18n()
+
 const healthStatus = ref<HealthStatus>('checking')
 const healthDetail = ref<string>('')
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
 function buildHeaders(): HeadersInit {
-  const headers: HeadersInit = {}
+  const headers: HeadersInit = {
+    'Accept-Language': props.config.locale,
+  }
   if (props.config.workshopId.trim()) {
     headers['X-MES-Workshop-Id'] = props.config.workshopId.trim()
   }
@@ -49,9 +54,7 @@ async function checkHealth() {
     healthStatus.value = 'unhealthy'
     const msg = err instanceof Error ? err.message : 'Connection failed'
     healthDetail.value =
-      msg === 'Failed to fetch'
-        ? 'Blocked by browser (CORS) or backend unreachable'
-        : msg
+      msg === 'Failed to fetch' ? t('dashboard.corsError') : msg
   }
 }
 
@@ -60,12 +63,18 @@ function onChipClick(chip: QuickChip) {
 }
 
 function formatTime(date: Date) {
-  return date.toLocaleTimeString('en-US', {
+  return date.toLocaleTimeString(locale.value, {
     hour12: false,
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
   })
+}
+
+function healthLabel() {
+  if (healthStatus.value === 'healthy') return t('common.online')
+  if (healthStatus.value === 'unhealthy') return t('common.offline')
+  return t('common.checking')
 }
 
 onMounted(() => {
@@ -80,7 +89,6 @@ onUnmounted(() => {
 
 <template>
   <div class="flex h-full flex-col overflow-hidden">
-    <!-- Header -->
     <div class="shrink-0 border-b border-zinc-800 px-5 py-4">
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-3">
@@ -88,17 +96,13 @@ onUnmounted(() => {
             <Activity class="h-4 w-4 text-sky-400" />
           </div>
           <div>
-            <h2 class="text-sm font-semibold text-zinc-100">Dashboard Simulation</h2>
-            <p class="text-[11px] text-zinc-500">MES control station monitor</p>
+            <h2 class="text-sm font-semibold text-zinc-100">{{ t('dashboard.title') }}</h2>
+            <p class="text-[11px] text-zinc-500">{{ t('dashboard.subtitle') }}</p>
           </div>
         </div>
 
-        <!-- Health indicator -->
         <div class="flex items-center gap-2.5 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
-          <span
-            class="relative flex h-2.5 w-2.5"
-            :title="healthDetail"
-          >
+          <span class="relative flex h-2.5 w-2.5" :title="healthDetail">
             <span
               v-if="healthStatus === 'healthy'"
               class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-40"
@@ -113,20 +117,19 @@ onUnmounted(() => {
             />
           </span>
           <div class="text-right">
-            <p class="text-[11px] font-medium text-zinc-300">
-              {{ healthStatus === 'healthy' ? 'Online' : healthStatus === 'unhealthy' ? 'Offline' : 'Checking…' }}
-            </p>
+            <p class="text-[11px] font-medium text-zinc-300">{{ healthLabel() }}</p>
             <p class="font-mono text-[10px] text-zinc-500">{{ healthDetail }}</p>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- Quick-click chips -->
     <div class="shrink-0 border-b border-zinc-800 px-5 py-4">
       <div class="mb-2.5 flex items-center gap-2">
         <Zap class="h-3.5 w-3.5 text-amber-400" />
-        <span class="text-xs font-medium uppercase tracking-wider text-zinc-500">Quick Test Prompts</span>
+        <span class="text-xs font-medium uppercase tracking-wider text-zinc-500">
+          {{ t('dashboard.quickPrompts') }}
+        </span>
       </div>
       <div class="flex flex-wrap gap-2">
         <button
@@ -137,7 +140,7 @@ onUnmounted(() => {
           @click="onChipClick(chip)"
         >
           <span class="block text-xs font-medium text-zinc-200 group-hover:text-sky-300">
-            {{ chip.label }}
+            {{ t(chip.labelKey) }}
           </span>
           <span class="mt-0.5 block max-w-xs truncate font-mono text-[10px] text-zinc-500">
             {{ chip.query }}
@@ -146,15 +149,14 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- Event log -->
     <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div class="flex shrink-0 items-center gap-2 border-b border-zinc-800/60 px-5 py-3">
         <Database class="h-3.5 w-3.5 text-emerald-400" />
         <span class="text-xs font-medium uppercase tracking-wider text-zinc-500">
-          Execution Event Log
+          {{ t('dashboard.eventLog') }}
         </span>
         <span class="ml-auto rounded-full bg-zinc-800 px-2 py-0.5 font-mono text-[10px] text-zinc-400">
-          {{ eventLog.length }} events
+          {{ t('dashboard.events', { count: eventLog.length }) }}
         </span>
       </div>
 
@@ -164,10 +166,8 @@ onUnmounted(() => {
           class="flex h-full flex-col items-center justify-center text-center"
         >
           <Database class="mb-3 h-8 w-8 text-zinc-700" />
-          <p class="text-sm text-zinc-500">No execution events yet</p>
-          <p class="mt-1 max-w-xs text-xs text-zinc-600">
-            Structured <code class="text-zinc-500">result</code> payloads from the backend will appear here
-          </p>
+          <p class="text-sm text-zinc-500">{{ t('dashboard.noEvents') }}</p>
+          <p class="mt-1 max-w-xs text-xs text-zinc-600">{{ t('dashboard.noEventsHint') }}</p>
         </div>
 
         <div v-else class="space-y-2">

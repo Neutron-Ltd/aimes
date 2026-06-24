@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import ControlSettings from './components/ControlSettings.vue'
 import DashboardSimulation from './components/DashboardSimulation.vue'
 import ChatPanel from './components/ChatPanel.vue'
@@ -9,30 +10,36 @@ import type {
   EventLogEntry,
   QueryResponse,
 } from './types/api'
+import { getAppLocale, setAppLocale } from './i18n'
+import {
+  executeTextQuery as apiExecuteTextQuery,
+  executeVoiceQuery as apiExecuteVoiceQuery,
+  formatApiError,
+} from './composables/useChatApi'
+import {
+  loadChatHistory,
+  saveChatMessage,
+  clearChatHistory,
+} from './services/chatHistory'
+
+const { t } = useI18n()
 
 const config = ref<AppConfig>({
-  baseURL: import.meta.env.VITE_API_BASE_URL || '',
+  baseURL: import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000',
   workshopId: '',
   enrichResponse: true,
+  locale: getAppLocale(),
 })
 
 const messages = ref<ChatMessage[]>([])
 const eventLog = ref<EventLogEntry[]>([])
 const loading = ref(false)
+const historyBanner = ref<string | null>(null)
+const lastQuery = ref<string | null>(null)
 const chatPanelRef = ref<InstanceType<typeof ChatPanel> | null>(null)
 
 function uid() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-}
-
-function buildHeaders(): HeadersInit {
-  const headers: HeadersInit = {
-    'Content-Type': 'application/json',
-  }
-  if (config.value.workshopId.trim()) {
-    headers['X-MES-Workshop-Id'] = config.value.workshopId.trim()
-  }
-  return headers
 }
 
 function formatIntent(intent: QueryResponse['intent']): string {
@@ -47,7 +54,6 @@ function extractSchemaTables(result: QueryResponse['result']): string[] {
   if (result == null) return []
 
   const tables = new Set<string>()
-
   if (typeof result === 'object') {
     Object.entries(result).forEach(([key, val]) => {
       tables.add(key)
@@ -56,7 +62,6 @@ function extractSchemaTables(result: QueryResponse['result']): string[] {
       }
     })
   }
-
   return [...tables]
 }
 
@@ -73,9 +78,7 @@ function appendEventLog(response: QueryResponse) {
   let preview = ''
   try {
     preview = JSON.stringify(response.result, null, 2)
-    if (preview.length > 500) {
-      preview = preview.slice(0, 500) + '…'
-    }
+    if (preview.length > 500) preview = preview.slice(0, 500) + '…'
   } catch {
     preview = String(response.result)
   }
@@ -90,148 +93,170 @@ function appendEventLog(response: QueryResponse) {
   })
 }
 
-function addUserMessage(content: string) {
-  messages.value.push({
+async function persistMessage(msg: ChatMessage) {
+  try {
+    await saveChatMessage(config.value, msg)
+  } catch {
+    historyBanner.value = t('chat.historySaveFailed')
+  }
+}
+
+async function addUserMessage(content: string) {
+  const msg: ChatMessage = {
     id: uid(),
     role: 'user',
     content,
     timestamp: new Date(),
-  })
+  }
+  messages.value.push(msg)
+  await persistMessage(msg)
 }
 
-function addAssistantMessage(response: QueryResponse) {
-  messages.value.push({
+async function addAssistantMessage(response: QueryResponse) {
+  const msg: ChatMessage = {
     id: uid(),
     role: 'assistant',
-    content: response.message || '(empty response)',
+    content: response.message || t('chat.emptyResponse'),
     timestamp: new Date(),
     response,
-  })
+  }
+  messages.value.push(msg)
   appendEventLog(response)
+  await persistMessage(msg)
 }
 
-function addErrorMessage(content: string) {
-  messages.value.push({
+async function addErrorMessage(content: string, retryable = true) {
+  const msg: ChatMessage = {
     id: uid(),
     role: 'error',
     content,
     timestamp: new Date(),
-  })
+  }
+  messages.value.push(msg)
+  await persistMessage(msg)
+  return retryable
+}
+
+async function hydrateHistory() {
+  historyBanner.value = null
+  if (!config.value.workshopId.trim()) {
+    messages.value = []
+    return
+  }
+
+  try {
+    messages.value = await loadChatHistory(config.value)
+  } catch {
+    historyBanner.value = t('chat.historyLoadFailed')
+  }
 }
 
 async function executeTextQuery(query: string) {
   if (loading.value) return
 
-  addUserMessage(query)
+  lastQuery.value = query
+  await addUserMessage(query)
   loading.value = true
 
-  const base = config.value.baseURL.replace(/\/$/, '')
+  const result = await apiExecuteTextQuery(config.value, query)
 
-  try {
-    const res = await fetch(`${base}/api/v1/query`, {
-      method: 'POST',
-      headers: buildHeaders(),
-      body: JSON.stringify({
-        query,
-        enrich_response: config.value.enrichResponse,
-      }),
-    })
-
-    if (!res.ok) {
-      let detail = `HTTP ${res.status}`
-      try {
-        const errBody = await res.json()
-        detail = (errBody as { detail?: string }).detail ?? JSON.stringify(errBody)
-      } catch {
-        /* ignore parse failure */
-      }
-      addErrorMessage(`Request failed: ${detail}`)
-      return
-    }
-
-    const data = (await res.json()) as QueryResponse
-    addAssistantMessage(data)
-  } catch (err) {
-    addErrorMessage(
-      err instanceof Error ? err.message : 'Network error — is the backend running?',
-    )
-  } finally {
-    loading.value = false
+  if (!result.ok) {
+    const message = formatApiError(result.error, t, 'errors.requestFailed')
+    await addErrorMessage(message, result.error.retryable)
+  } else {
+    await addAssistantMessage(result.data)
   }
+
+  loading.value = false
 }
 
 async function executeVoiceQuery(blob: Blob) {
   if (loading.value) return
 
-  addUserMessage('🎤 Voice query submitted')
+  await addUserMessage(t('chat.voiceSubmitted'))
   loading.value = true
 
-  const base = config.value.baseURL.replace(/\/$/, '')
-  const formData = new FormData()
+  const result = await apiExecuteVoiceQuery(config.value, blob)
 
-  const ext = blob.type.includes('wav') ? 'wav' : 'webm'
-  formData.append('file', blob, `recording.${ext}`)
-
-  const headers: HeadersInit = {}
-  if (config.value.workshopId.trim()) {
-    headers['X-MES-Workshop-Id'] = config.value.workshopId.trim()
+  if (!result.ok) {
+    const message = formatApiError(result.error, t, 'errors.voiceFailed')
+    await addErrorMessage(message, result.error.retryable)
+  } else {
+    lastQuery.value = result.data.transcript ?? lastQuery.value
+    await addAssistantMessage(result.data)
   }
 
+  loading.value = false
+}
+
+async function onMicError(message: string) {
+  await addErrorMessage(message, false)
+}
+
+async function onRetry() {
+  if (lastQuery.value) {
+    await executeTextQuery(lastQuery.value)
+  }
+}
+
+async function onClearHistory() {
   try {
-    const res = await fetch(`${base}/api/v1/query/voice`, {
-      method: 'POST',
-      headers,
-      body: formData,
-    })
-
-    if (!res.ok) {
-      let detail = `HTTP ${res.status}`
-      try {
-        const errBody = await res.json()
-        detail = (errBody as { detail?: string }).detail ?? JSON.stringify(errBody)
-      } catch {
-        /* ignore */
-      }
-      addErrorMessage(`Voice request failed: ${detail}`)
-      return
-    }
-
-    const data = (await res.json()) as QueryResponse
-    addAssistantMessage(data)
-  } catch (err) {
-    addErrorMessage(
-      err instanceof Error ? err.message : 'Voice upload failed — check backend connectivity',
-    )
-  } finally {
-    loading.value = false
+    await clearChatHistory(config.value)
+    messages.value = []
+    historyBanner.value = t('settings.historyCleared')
+  } catch {
+    historyBanner.value = t('chat.historySaveFailed')
   }
 }
 
 function onChipClick(query: string) {
   chatPanelRef.value?.submitQuery(query)
 }
+
+function onLocaleChange(locale: AppConfig['locale']) {
+  setAppLocale(locale)
+  config.value = { ...config.value, locale }
+}
+
+watch(
+  () => config.value.workshopId,
+  () => {
+    hydrateHistory()
+  },
+)
+
+onMounted(() => {
+  hydrateHistory()
+})
 </script>
 
 <template>
   <div class="flex h-full flex-col overflow-hidden bg-zinc-950">
-    <!-- Top bar -->
     <header class="flex shrink-0 items-center justify-between border-b border-zinc-800 bg-zinc-900/80 px-5 py-2.5 backdrop-blur-sm">
       <div class="flex items-center gap-3">
         <div class="h-2 w-2 rounded-full bg-sky-500" />
         <h1 class="text-sm font-semibold tracking-tight text-zinc-100">
-          MES AI Test Console
+          {{ t('header.title') }}
         </h1>
         <span class="rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500">
-          v0.1
+          {{ t('common.version') }}
         </span>
       </div>
       <ControlSettings
         :config="config"
         @update:config="config = $event"
+        @locale-change="onLocaleChange"
+        @clear-history="onClearHistory"
       />
     </header>
 
-    <!-- Split layout: 2/3 dashboard | 1/3 chat -->
+    <div
+      v-if="historyBanner"
+      class="shrink-0 border-b border-amber-800/40 bg-amber-950/30 px-5 py-2 text-xs text-amber-200"
+    >
+      {{ historyBanner }}
+    </div>
+
     <main class="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-3">
       <section class="min-h-0 overflow-hidden border-b border-zinc-800 lg:col-span-2 lg:border-b-0 lg:border-r">
         <DashboardSimulation
@@ -249,6 +274,8 @@ function onChipClick(query: string) {
           :loading="loading"
           @submit="executeTextQuery"
           @voice-submit="executeVoiceQuery"
+          @retry="onRetry"
+          @mic-error="onMicError"
         />
       </section>
     </main>

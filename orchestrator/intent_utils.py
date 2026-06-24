@@ -118,7 +118,11 @@ def map_extraction_to_intent_schema(
     )
 
 
-async def parse_intent(query: str, context: MCPContext) -> IntentSchema:
+async def parse_intent(
+    query: str,
+    context: MCPContext,
+    locale: str = "zh-CN",
+) -> IntentSchema:
     normalized = query.strip()
     settings = get_settings()
 
@@ -128,7 +132,7 @@ async def parse_intent(query: str, context: MCPContext) -> IntentSchema:
             "DASHSCOPE_API_KEY or BAILIAN_APP_ID not configured",
         )
 
-    prompt_text = build_intent_prompt(normalized, context)
+    prompt_text = build_intent_prompt(normalized, context, locale)
 
     try:
         response = await asyncio.to_thread(

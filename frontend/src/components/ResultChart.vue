@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onBeforeUnmount, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import * as echarts from 'echarts/core'
 import { BarChart, LineChart } from 'echarts/charts'
 import {
@@ -16,6 +17,8 @@ echarts.use([BarChart, LineChart, GridComponent, TooltipComponent, TitleComponen
 const props = defineProps<{
   result: Record<string, unknown> | unknown[] | null
 }>()
+
+const { t } = useI18n()
 
 const chartRef = ref<HTMLElement | null>(null)
 let chartInstance: echarts.ECharts | null = null
@@ -160,7 +163,7 @@ watch(payload, () => {
   >
     <div class="border-b border-zinc-800/80 px-3 py-2">
       <span class="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
-        Data Visualization
+        {{ t('chat.dataVisualization') }}
       </span>
     </div>
     <div ref="chartRef" class="h-52 w-full" />

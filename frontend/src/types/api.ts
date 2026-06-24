@@ -61,11 +61,14 @@ export interface EventLogEntry {
   resultPreview: string
 }
 
+import type { AppLocale } from '../i18n'
+
 /** Shared app configuration */
 export interface AppConfig {
   baseURL: string
   workshopId: string
   enrichResponse: boolean
+  locale: AppLocale
 }
 
 /** Health status for dashboard indicator */
@@ -74,29 +77,29 @@ export type HealthStatus = 'healthy' | 'unhealthy' | 'checking'
 /** Quick-click chip definition */
 export interface QuickChip {
   id: string
-  label: string
+  labelKey: string
   query: string
 }
 
 export const QUICK_CHIPS: QuickChip[] = [
   {
     id: 'chip-a',
-    label: 'Line FDQ-SMT-3 Yield',
+    labelKey: 'chips.lineYield',
     query: 'Total equipment yield on line FDQ-SMT-3 for 2026-06-20',
   },
   {
     id: 'chip-b',
-    label: 'Device BB-SMT-029 Yield',
+    labelKey: 'chips.deviceYield',
     query: 'Equipment yield for device BB-SMT-029 on 2026-06-20',
   },
   {
     id: 'chip-c',
-    label: 'Cross-Module FDQ-SMT-3',
+    labelKey: 'chips.crossModule',
     query: 'Cross-module analysis for line FDQ-SMT-3',
   },
   {
     id: 'chip-d',
-    label: 'Obsolete Inventory 90d',
+    labelKey: 'chips.obsoleteInventory',
     query: 'Profile obsolete inventory older than 90 days',
   },
 ]

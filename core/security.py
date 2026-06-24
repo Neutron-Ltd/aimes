@@ -21,12 +21,16 @@ HEADER_PERMISSION_LEVEL = "X-MES-Permission-Level"
 
 
 class RBACMiddleware(BaseHTTPMiddleware):
-    """Injects an empty MCP context — no workshop or permission enforcement."""
+    """Injects MCP context from headers — no row-level data scoping enforced."""
 
     async def dispatch(
         self, request: Request, call_next: RequestResponseEndpoint
     ) -> Response:
-        request.state.mes_context = MCPContext()
+        request.state.mes_context = MCPContext(
+            workshop_id=request.headers.get(HEADER_WORKSHOP_ID),
+            user_id=request.headers.get(HEADER_USER_ID),
+            permission_level=request.headers.get(HEADER_PERMISSION_LEVEL) or "operator",
+        )
         return await call_next(request)
 
 
@@ -44,7 +48,11 @@ def get_mes_context_from_headers(
     x_mes_permission_level: Optional[str] = None,
 ) -> MCPContext:
     """Swagger-compatible dependency; headers are accepted but not enforced."""
-    return MCPContext()
+    return MCPContext(
+        workshop_id=x_mes_workshop_id,
+        user_id=x_mes_user_id,
+        permission_level=x_mes_permission_level or "operator",
+    )
 
 
 MESContextDep = Depends(get_mes_context)
