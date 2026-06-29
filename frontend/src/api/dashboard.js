@@ -52,7 +52,7 @@ export async function getAssistantDashboard(
 
   if (module === 'production' || module === 'quality' || module === 'equipment') {
     params.set('line_id', lineId)
-  } else if (module === 'warehouse' && whCode) {
+  } else if ((module === 'warehouse' || module === 'procurement') && whCode) {
     params.set('wh_code', whCode)
   }
 

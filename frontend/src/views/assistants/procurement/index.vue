@@ -56,8 +56,7 @@
 import AssistantPageHeader from '../../../components/AssistantPageHeader.vue'
 import AssistantChartMosaic from '../../../components/AssistantChartMosaic.vue'
 import AssistantChatConsole from '../../../components/AssistantChatConsole.vue'
-import { useAssistantPage } from '../../../composables/useAssistantPage'
-import { buildProcurementCharts } from './charts'
+import { useProcurementAssistantPage } from '../../../composables/useProcurementAssistantPage'
 
 const assistantKey = 'procurement'
 
@@ -69,5 +68,5 @@ const {
   getChartGridStyle,
   setChartRef,
   t
-} = useAssistantPage(assistantKey, buildProcurementCharts)
+} = useProcurementAssistantPage()
 </script>

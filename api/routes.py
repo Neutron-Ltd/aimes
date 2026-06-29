@@ -7,6 +7,7 @@ from core.dashboard.production import production_dashboard_builder
 from core.dashboard.warehouse import warehouse_dashboard_builder
 from core.dashboard.quality import quality_dashboard_builder
 from core.dashboard.equipment import equipment_dashboard_builder
+from core.dashboard.procurement import procurement_dashboard_builder
 from core.config import get_settings
 from core.chat_store import append_message, clear_history, list_messages
 from core.export.excel import export_to_excel
@@ -35,6 +36,7 @@ DASHBOARD_BUILDERS = {
     "warehouse": warehouse_dashboard_builder,
     "quality": quality_dashboard_builder,
     "equipment": equipment_dashboard_builder,
+    "procurement": procurement_dashboard_builder,
 }
 
 
@@ -63,7 +65,7 @@ async def health() -> dict[str, str]:
     description=(
         "Returns KPI and chart slot data for the assistant UI. "
         "Calls MCP tools directly (no NL parsing). "
-        "Implemented modules: production, warehouse, quality, equipment."
+        "Implemented modules: production, warehouse, quality, equipment, procurement."
     ),
 )
 async def get_assistant_dashboard(
