@@ -4,7 +4,7 @@ This document describes the new UI design in the `frontend/` folder: what it is,
 
 **Product name (UI):** 宁波睿创 AI 工业大脑 (Ningbo Ruichuang AI Industrial Brain)  
 **Package name:** `mes-ai-client`  
-**Current state:** Production, warehouse, and quality assistants use live backend data for dashboard and chat; other assistants use mock data.
+**Current state:** Production, warehouse, quality, and equipment assistants use live backend data for dashboard and chat; procurement remains mock-only.
 
 ---
 
@@ -235,7 +235,7 @@ Home page also references one **external** portrait URL for the floating AI deco
 
 ## Backend Integration
 
-Production, warehouse, and quality assistants are integrated with the NEUTRON backend. Other assistants remain mock-only until their dashboard builders are implemented.
+Production, warehouse, quality, and equipment assistants are integrated with the NEUTRON backend. Procurement remains mock-only until its dashboard builder is implemented.
 
 ### Environment variables
 
@@ -247,7 +247,7 @@ Copy [`frontend/.env.example`](frontend/.env.example) to `.env.development` or `
 | `VITE_DEFAULT_LINE_ID` | Production line for dashboard | `FDQ-SMT-3` |
 | `VITE_DEFAULT_WH_CODE` | Warehouse code filter (empty = all) | empty |
 | `VITE_DEFAULT_WORKSHOP_ID` | Header for chat history APIs | `WS-001` |
-| `VITE_INTEGRATED_ASSISTANTS` | Comma-separated live modules | `production,warehouse,quality` |
+| `VITE_INTEGRATED_ASSISTANTS` | Comma-separated live modules | `production,warehouse,quality,equipment` |
 
 **Standalone repo:** set `VITE_API_BASE_URL=http://127.0.0.1:8000` and ensure backend CORS allows your frontend origin (port 3000 is included).
 
@@ -260,6 +260,7 @@ Backend optional: `DEFAULT_LINE_ID=FDQ-SMT-3`, `DEFAULT_WH_CODE=WH01` in root `.
 | `GET /api/v1/assistants/production/dashboard` | Production dashboard | KPI + chart slots (`line_id`) |
 | `GET /api/v1/assistants/warehouse/dashboard` | Warehouse dashboard | KPI + chart slots (`wh_code` optional) |
 | `GET /api/v1/assistants/quality/dashboard` | Quality dashboard | KPI + chart slots (`line_id` optional) |
+| `GET /api/v1/assistants/equipment/dashboard` | Equipment dashboard | KPI + chart slots (`line_id` optional) |
 | `POST /api/v1/query` | Integrated assistant chat | NL query → Markdown reply |
 | `GET /api/v1/health` | Optional | Liveness check |
 
@@ -273,6 +274,7 @@ frontend/src/composables/
   useProductionAssistantPage.js   # production wrapper
   useWarehouseAssistantPage.js    # warehouse wrapper
   useQualityAssistantPage.js      # quality wrapper
+  useEquipmentAssistantPage.js    # equipment wrapper
   useAssistantChat.js             # routes integrated keys to /query
   useAssistantPage.js             # optional live KPI/chart refs
 ```
@@ -284,6 +286,8 @@ frontend/src/composables/
 **Partial live data (warehouse):** Charts 出入库趋势, 拣货效率趋势, 收货及时率 have no MCP tools yet; KPI 库存准确率 is derived from stock summary SQL.
 
 **Partial live data (quality):** Chart 检验及时率 has no MCP tool; chart 返修率趋势 may fall back if daily rework series is empty; chart 缺陷类型排行 may show 8D reason text rather than fixed i18n categories.
+
+**Partial live data (equipment):** KPI 平均停机, charts 告警等级分布 and MTBF趋势 have no MES data source; chart 停机时长分析 uses a production-rate proxy and may show device names instead of equipment-type categories.
 
 ### Local development (integrated)
 
@@ -300,7 +304,7 @@ Terminal 2 — frontend (Vite proxies `/api/v1` → backend):
 cd frontend && npm run dev   # http://localhost:3000
 ```
 
-Open `/assistant/production`, `/assistant/warehouse`, or `/assistant/quality` — dashboard loads from API; chat sends to `/api/v1/query`.
+Open `/assistant/production`, `/assistant/warehouse`, `/assistant/quality`, or `/assistant/equipment` — dashboard loads from API; chat sends to `/api/v1/query`.
 
 ---
 
@@ -311,7 +315,7 @@ Open `/assistant/production`, `/assistant/warehouse`, or `/assistant/quality` �
 | production | Live (`GET .../production/dashboard`) | Live (`POST /query`) |
 | warehouse | Live (`GET .../warehouse/dashboard`) | Live (`POST /query`) |
 | quality | Live (`GET .../quality/dashboard`) | Live (`POST /query`) |
-| equipment | Mock | Mock |
+| equipment | Live (`GET .../equipment/dashboard`) | Live (`POST /query`) |
 | procurement | Mock | Mock |
 
 ---
@@ -384,7 +388,7 @@ Items to be aware of when continuing development:
 1. **`frontend/README.md` is outdated** — It describes a single `AssistantDashboard.vue` driven by `assistantConfigs.js`. The implemented design uses **five separate** `views/assistants/*/index.vue` files and **`useLocale().getAssistantPageConfig`** for text.
 2. **`pageConfig.js` per assistant is dead code** — Safe to remove or wire up only if you want locale-free static configs again.
 3. **Mock data everywhere** — Dashboards are demos; numbers and chart series do not reflect live MES PostgreSQL data.
-4. **Equipment & procurement backend tools** — Backend MCP coverage today is strongest for production, quality, and warehouse. Equipment and procurement UIs exist in the frontend but may need new backend intents/tools before real data can be shown.
+4. **Procurement backend tools** — Procurement UI exists in the frontend but has no dashboard builder or dedicated MCP tools yet.
 5. **External floating avatar URL** — Consider hosting locally under `public/` for reliability.
 6. **No frontend Dockerfile** — Required for the existing compose stack.
 
@@ -392,6 +396,6 @@ Items to be aware of when continuing development:
 
 ## Summary
 
-The frontend is a **Vue 3 + Vite + Element Plus + ECharts** showcase for five manufacturing AI assistants. **Production**, **warehouse**, and **quality** are wired to the FastAPI backend; remaining assistants use mock data until their dashboard builders are added.
+The frontend is a **Vue 3 + Vite + Element Plus + ECharts** showcase for five manufacturing AI assistants. **Production**, **warehouse**, **quality**, and **equipment** are wired to the FastAPI backend; procurement uses mock data until its dashboard builder is added.
 
 For backend API details, intent routing, and test queries, see [readme.md](./readme.md), [mesai-mcp-1.1.md](./mesai-mcp-1.1.md), and [mesai-query-1.1.md](./mesai-query-1.1.md).

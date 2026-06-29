@@ -6,6 +6,7 @@ from fastapi.responses import StreamingResponse
 from core.dashboard.production import production_dashboard_builder
 from core.dashboard.warehouse import warehouse_dashboard_builder
 from core.dashboard.quality import quality_dashboard_builder
+from core.dashboard.equipment import equipment_dashboard_builder
 from core.config import get_settings
 from core.chat_store import append_message, clear_history, list_messages
 from core.export.excel import export_to_excel
@@ -33,6 +34,7 @@ DASHBOARD_BUILDERS = {
     "production": production_dashboard_builder,
     "warehouse": warehouse_dashboard_builder,
     "quality": quality_dashboard_builder,
+    "equipment": equipment_dashboard_builder,
 }
 
 
@@ -61,7 +63,7 @@ async def health() -> dict[str, str]:
     description=(
         "Returns KPI and chart slot data for the assistant UI. "
         "Calls MCP tools directly (no NL parsing). "
-        "Implemented modules: production, warehouse, quality."
+        "Implemented modules: production, warehouse, quality, equipment."
     ),
 )
 async def get_assistant_dashboard(
@@ -98,6 +100,15 @@ async def get_assistant_dashboard(
         )
 
     if module == "quality":
+        resolved_line = (line_id or settings.default_line_id or "").strip() or None
+        return await builder.build(
+            line_id=resolved_line,
+            locale=locale,
+            lookback_days=lookback_days,
+            context=context,
+        )
+
+    if module == "equipment":
         resolved_line = (line_id or settings.default_line_id or "").strip() or None
         return await builder.build(
             line_id=resolved_line,
