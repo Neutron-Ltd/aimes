@@ -15,6 +15,7 @@ from models.intents.system import CrossModuleParams
 from models.schemas import IntentType, MCPContext, OrchestratorResponse
 from orchestrator.cross_module import run_cross_module_analysis
 from orchestrator.intent_utils import RAG_INTENTS, parse_intent
+from orchestrator.module_personas import resolve_module, strip_domain_prefix
 from orchestrator.param_mappers import PARAM_MAPPERS
 from orchestrator.param_validation import validate_intent_params
 from orchestrator.report_generator import _fallback_markdown_report, generate_ai_analysis, get_companion_greeting
@@ -33,18 +34,36 @@ _NO_SYNTHESIS_INTENTS = frozenset(
 )
 
 
+def _resolve_assistant_module(
+    query: str, assistant_module: Optional[str]
+) -> tuple[str, str, str]:
+    """Return (cleaned_query, resolved_module, original_query)."""
+    cleaned, prefix_module = strip_domain_prefix(query)
+    module = resolve_module(assistant_module or prefix_module)
+    return cleaned, module, query
+
+
 async def _synthesize_message(
     query: str,
     db_result: dict[str, Any],
     rag_context: Optional[str],
     locale: str = "zh-CN",
+    module: Optional[str] = None,
 ) -> str:
     """Run second-pass LLM synthesis with formatted fallback on any failure."""
     try:
-        return await generate_ai_analysis(query, db_result, rag_context, locale)
+        return await generate_ai_analysis(
+            query, db_result, rag_context, locale, module=module
+        )
     except Exception:
         logger.exception("Synthesis pipeline failed unexpectedly")
-        return _fallback_markdown_report(query, db_result, reason="synthesis pipeline error", locale=locale)
+        return _fallback_markdown_report(
+            query,
+            db_result,
+            reason="synthesis pipeline error",
+            locale=locale,
+            module=module,
+        )
 
 
 async def _run_tool(
@@ -55,6 +74,7 @@ async def _run_tool(
     context: MCPContext,
     metadata: dict | None = None,
     locale: str = "zh-CN",
+    module: Optional[str] = None,
 ) -> OrchestratorResponse:
     tool_result: MCPToolResult = await tool.run(params, context)
     meta = metadata or {}
@@ -74,6 +94,7 @@ async def _run_tool(
         tool_result.data,
         rag_context,
         locale,
+        module,
     )
 
     return OrchestratorResponse(
@@ -90,17 +111,23 @@ async def route_and_execute(
     context: MCPContext,
     enrich_response: bool = True,
     locale: str = "zh-CN",
+    assistant_module: Optional[str] = None,
 ) -> OrchestratorResponse:
-    intent = await parse_intent(query, context, locale)
-    logger.info(
-        "Parsed intent=%s line=%s",
-        intent.intent,
-        intent.line_id,
+    cleaned_query, module, _original_query = _resolve_assistant_module(
+        query, assistant_module
     )
 
-    metadata: dict = {}
+    intent = await parse_intent(cleaned_query, context, locale)
+    logger.info(
+        "Parsed intent=%s line=%s module=%s",
+        intent.intent,
+        intent.line_id,
+        module,
+    )
+
+    metadata: dict = {"assistant_module": module}
     if enrich_response and intent.intent in RAG_INTENTS:
-        rag_context = await retrieve_context(query, top_k=5)
+        rag_context = await retrieve_context(cleaned_query, top_k=5)
         if rag_context:
             metadata["rag_context"] = rag_context
 
@@ -114,14 +141,15 @@ async def route_and_execute(
                 message=validation.message,
                 metadata=metadata,
             )
-        params = CrossModuleParams(line_id=intent.line_id.strip(), raw_query=query)
+        params = CrossModuleParams(line_id=intent.line_id.strip(), raw_query=cleaned_query)
         cross_result = await run_cross_module_analysis(params, context)
         result_dict = cross_result.model_dump(mode="json")
         report = await _synthesize_message(
-            query,
+            cleaned_query,
             result_dict,
             metadata.get("rag_context"),
             locale,
+            module,
         )
         return OrchestratorResponse(
             intent=intent,
@@ -144,7 +172,7 @@ async def route_and_execute(
             intent=intent,
             tool_name=None,
             result=None,
-            message=get_companion_greeting(locale),
+            message=get_companion_greeting(locale, module),
             metadata=metadata,
         )
 
@@ -171,4 +199,13 @@ async def route_and_execute(
         )
 
     params = mapper(intent)
-    return await _run_tool(query, intent, tool, params, context, metadata, locale)
+    return await _run_tool(
+        cleaned_query,
+        intent,
+        tool,
+        params,
+        context,
+        metadata,
+        locale,
+        module,
+    )

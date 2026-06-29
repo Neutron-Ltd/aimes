@@ -10,6 +10,7 @@ from typing import Any, Callable, Optional
 
 import dashscope
 
+from orchestrator.module_personas import get_module_greeting
 from orchestrator.prompts.synthesis import build_synthesis_prompt
 from core.config import get_settings
 from core.logging import get_logger
@@ -19,45 +20,12 @@ logger = get_logger(__name__)
 SYNTHESIS_TIMEOUT_SECONDS = 120
 
 # ---------------------------------------------------------------------------
-# Companion / greeting copy
+# Companion / greeting copy — delegated to module_personas (see messages.js)
 # ---------------------------------------------------------------------------
 
-COMPANION_GREETING_EN = """Hello! I am your **MES AI Assistant**. I can help you monitor live production metrics, analyze quality defects, or trace warehouse inventory lines.
 
----
-
-### Try asking me something like:
-
-- *Show me the equipment yield for machine BB-SMT-029 this week*
-- *What is the current defect rate of the injection molding process?*
-- *Run a reverse traceability check for finished lot ABC-2026-001*
-- *Compare equipment yield on line FDQ-SMT-3 between last week and this week*
-
----
-
-How can I assist your production floor today?"""
-
-COMPANION_GREETING_ZH = """您好！我是 **MES AI 助手**，可以帮您监控实时生产指标、分析质量缺陷或追溯仓库库存。
-
----
-
-### 您可以这样问我：
-
-- *查询设备 BB-SMT-029 本周的设备产量*
-- *注塑工序当前的缺陷率是多少？*
-- *对成品批次 ABC-2026-001 进行反向追溯*
-- *对比产线 FDQ-SMT-3 上周与本周的设备产量*
-
----
-
-今天需要我协助车间处理什么问题？"""
-
-# Backward-compatible alias
-COMPANION_GREETING = COMPANION_GREETING_EN
-
-
-def get_companion_greeting(locale: str = "zh-CN") -> str:
-    return COMPANION_GREETING_ZH if locale == "zh-CN" else COMPANION_GREETING_EN
+def get_companion_greeting(locale: str = "zh-CN", module: Optional[str] = None) -> str:
+    return get_module_greeting(locale, module)
 
 
 # ---------------------------------------------------------------------------
@@ -330,13 +298,17 @@ def _fallback_markdown_report(
     db_result: dict[str, Any],
     reason: Optional[str] = None,
     locale: str = "zh-CN",
+    module: Optional[str] = None,
 ) -> str:
     """Deterministic executive-style report when Bailian synthesis is unavailable."""
+    from orchestrator.module_personas import get_fallback_report_meta
+
     _ = query  # retained for logging/call-site compatibility; never echoed to users
     zh = locale == "zh-CN"
+    report_title, empty_hints = get_fallback_report_meta(locale, module)
 
     lines = [
-        "### 运营分析报告" if zh else "### Operational Analysis Report",
+        f"### {report_title}",
         "",
         "*MES AI 助手 — 自动摘要*" if zh else "*MES AI Assistant — automated summary*",
         "",
@@ -365,17 +337,10 @@ def _fallback_markdown_report(
             "",
             "**建议后续步骤**" if zh else "**Recommended next steps**",
             "",
-            "- 确认产线、设备序列号或产品编码拼写正确"
-            if zh
-            else "- Confirm the production line, machine serial, or product code spelling",
-            "- 扩大日期范围（设备日志通常覆盖最近几周的生产数据）"
-            if zh
-            else "- Widen the date range (equipment logs typically span recent production weeks)",
-            "- 使用具体指标重新表述，例如产量、缺陷率或库存状态"
-            if zh
-            else "- Rephrase with a specific metric, e.g. yield, defect rate, or inventory status",
-            "",
         ])
+        for hint in empty_hints:
+            lines.append(f"- {hint}")
+        lines.append("")
         return "\n".join(lines)
 
     lines.extend(["### 关键指标" if zh else "### Key Metrics", ""])
@@ -470,6 +435,7 @@ async def generate_ai_analysis(
     db_result: dict[str, Any],
     rag_context: Optional[str] = None,
     locale: str = "zh-CN",
+    module: Optional[str] = None,
 ) -> str:
     """
     Second-pass Bailian call: convert MCP tool output into a Markdown narrative.
@@ -484,9 +450,10 @@ async def generate_ai_analysis(
             db_result,
             reason="Bailian credentials not configured",
             locale=locale,
+            module=module,
         )
 
-    prompt_text = build_synthesis_prompt(query, db_result, rag_context, locale)
+    prompt_text = build_synthesis_prompt(query, db_result, rag_context, locale, module)
 
     try:
         response = await asyncio.wait_for(
@@ -502,11 +469,11 @@ async def generate_ai_analysis(
         if response.status_code != HTTPStatus.OK:
             message = getattr(response, "message", "Unknown Bailian API error")
             logger.warning("Synthesis Bailian error: %s", message)
-            return _fallback_markdown_report(query, db_result, reason=message, locale=locale)
+            return _fallback_markdown_report(query, db_result, reason=message, locale=locale, module=module)
 
         output_text = (response.output.text or "").strip()
         if not output_text:
-            return _fallback_markdown_report(query, db_result, reason="empty response", locale=locale)
+            return _fallback_markdown_report(query, db_result, reason="empty response", locale=locale, module=module)
 
         if settings.debug:
             logger.debug("Bailian synthesis response: %s", output_text[:500])
@@ -515,7 +482,7 @@ async def generate_ai_analysis(
 
     except asyncio.TimeoutError:
         logger.warning("Bailian synthesis timed out after %ss", SYNTHESIS_TIMEOUT_SECONDS)
-        return _fallback_markdown_report(query, db_result, reason="synthesis timeout", locale=locale)
+        return _fallback_markdown_report(query, db_result, reason="synthesis timeout", locale=locale, module=module)
     except Exception as exc:
         logger.exception("Unexpected error during Bailian synthesis")
-        return _fallback_markdown_report(query, db_result, reason=str(exc), locale=locale)
+        return _fallback_markdown_report(query, db_result, reason=str(exc), locale=locale, module=module)

@@ -12,16 +12,22 @@ import { toApiLocale } from './locale'
  */
 
 /**
- * @param {{ query: string, locale?: string, enrichResponse?: boolean }} params
+ * @param {{ query: string, locale?: string, enrichResponse?: boolean, assistantModule?: string }} params
  * @returns {Promise<OrchestratorResponse>}
  */
-export async function postQuery({ query, locale = 'zh', enrichResponse = true }) {
+export async function postQuery({
+  query,
+  locale = 'zh',
+  enrichResponse = true,
+  assistantModule
+}) {
   return apiFetch('/api/v1/query', {
     method: 'POST',
     body: JSON.stringify({
       query,
       enrich_response: enrichResponse,
-      locale: toApiLocale(locale)
+      locale: toApiLocale(locale),
+      ...(assistantModule ? { assistant_module: assistantModule } : {})
     })
   })
 }

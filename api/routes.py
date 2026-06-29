@@ -150,6 +150,7 @@ async def query_orchestrator(
         context,
         enrich_response=body.enrich_response,
         locale=body.locale,
+        assistant_module=body.assistant_module,
     )
 
 

@@ -40,7 +40,8 @@ export async function sendIntegratedChat(assistantKey, message, locale) {
     const response = await postQuery({
       query: wrapQuery(assistantKey, text),
       locale,
-      enrichResponse: true
+      enrichResponse: true,
+      assistantModule: assistantKey
     })
 
     const reply =

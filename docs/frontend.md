@@ -262,7 +262,7 @@ Backend optional: `DEFAULT_LINE_ID=FDQ-SMT-3`, `DEFAULT_WH_CODE=WH01` in root `.
 | `GET /api/v1/assistants/quality/dashboard` | Quality dashboard | KPI + chart slots (`line_id` optional) |
 | `GET /api/v1/assistants/equipment/dashboard` | Equipment dashboard | KPI + chart slots (`line_id` optional) |
 | `GET /api/v1/assistants/procurement/dashboard` | Procurement dashboard | KPI + chart slots (`wh_code` optional) |
-| `POST /api/v1/query` | Integrated assistant chat | NL query → Markdown reply |
+| `POST /api/v1/query` | Integrated assistant chat | NL query → Markdown reply; optional `assistant_module` for persona |
 | `GET /api/v1/health` | Optional | Liveness check |
 
 ### Integration architecture
@@ -282,6 +282,8 @@ frontend/src/composables/
 ```
 
 **Graceful degradation:** If the dashboard API fails, mock KPIs/charts remain. Slots marked `source: fallback` on the backend also keep mock chart data on the frontend.
+
+**Chat personas:** Integrated chat sends `assistant_module` (same key as the route, e.g. `procurement`) plus a domain prefix on the query string. The backend uses [`orchestrator/module_personas.py`](../orchestrator/module_personas.py) (aligned with `messages.js` greetings) for UNKNOWN-intent replies and module-specific synthesis/fallback report styles.
 
 **Partial live data (production):** KPI 在制工单, chart 工单状态分布, and chart OEE趋势 have no MCP tools yet.
 
@@ -400,6 +402,6 @@ Items to be aware of when continuing development:
 
 ## Summary
 
-The frontend is a **Vue 3 + Vite + Element Plus + ECharts** showcase for five manufacturing AI assistants. All five are wired to the FastAPI dashboard API; chat uses `/api/v1/query` with domain prefixes when listed in `VITE_INTEGRATED_ASSISTANTS`.
+The frontend is a **Vue 3 + Vite + Element Plus + ECharts** showcase for five manufacturing AI assistants. All five are wired to the FastAPI dashboard API; chat uses `/api/v1/query` with `assistant_module` and domain prefixes when listed in `VITE_INTEGRATED_ASSISTANTS`.
 
 For backend API details, intent routing, and test queries, see [readme.md](./readme.md), [mesai-mcp-1.1.md](./mesai-mcp-1.1.md), and [mesai-query-1.1.md](./mesai-query-1.1.md).

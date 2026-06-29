@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
+from orchestrator.module_personas import get_analyst_context, resolve_module
+
 _SUPPORTED_LOCALES = frozenset({"zh-CN", "en-US"})
 
 
@@ -17,9 +19,12 @@ def build_synthesis_prompt(
     db_result: dict[str, Any],
     rag_context: Optional[str] = None,
     locale: str = "zh-CN",
+    module: Optional[str] = None,
 ) -> str:
     """Build the second-pass Markdown synthesis prompt in the requested locale."""
     locale = _normalize_locale(locale)
+    module_key = resolve_module(module)
+    analyst_role, style_block = get_analyst_context(locale, module_key)
     result_json = json.dumps(db_result, indent=2, default=str)
 
     if locale == "zh-CN":
@@ -28,9 +33,12 @@ def build_synthesis_prompt(
             if rag_context
             else "（无补充知识库上下文。）"
         )
-        return f"""你是一名企业 MES（制造执行系统）的高级制造数据分析师。
+        return f"""{analyst_role}
 
-你的任务是解读结构化数据库查询结果，为生产、质量或仓储相关方撰写清晰、专业的 Markdown 分析报告。
+你的任务是解读结构化数据库查询结果，为相关制造业务方撰写清晰、专业的 Markdown 分析报告。
+
+## 领域报告风格
+{style_block}
 
 ## 用户问题
 {query}
@@ -45,7 +53,7 @@ def build_synthesis_prompt(
 
 ## 撰写要求
 1. 以专家分析师视角 — 用通俗语言解释数字含义，而非简单复述。
-2. 突出可执行的洞察：异常下降、峰值时段、阈值突破、库存为空、缺陷激增、排程风险、追溯缺口等。
+2. 突出可执行的洞察：异常下降、峰值时段、阈值突破、库存为空、缺陷激增、排程风险、追溯缺口等（按领域风格选取）。
 3. 使用专业 Markdown：简洁标题（`##`）、简短执行摘要、要点列表，必要时附简要建议。
 4. 引用 JSON 中的具体数值（日期、产线 ID、数量、比率、设备序列号）以支撑结论。
 5. 若结果为空、为零或无匹配记录，请礼貌说明数据库日志中无匹配交易记录，并建议用户调整（日期范围、产线 ID、设备序列号、产品编码）。
@@ -65,9 +73,12 @@ def build_synthesis_prompt(
         if rag_context
         else "(No supplementary knowledge-base context available.)"
     )
-    return f"""You are a Senior Manufacturing Data Analyst for an enterprise MES (Manufacturing Execution System).
+    return f"""{analyst_role}
 
-Your task is to interpret structured database query results and write a clear, professional Markdown report for production, quality, or warehouse stakeholders.
+Your task is to interpret structured database query results and write a clear, professional Markdown report for the relevant manufacturing stakeholders.
+
+## Domain report style
+{style_block}
 
 ## User question
 {query}
@@ -82,7 +93,7 @@ Your task is to interpret structured database query results and write a clear, p
 
 ## Instructions
 1. Act as an expert analyst — explain what the numbers mean in plain language, not just restate them.
-2. Highlight actionable insights: unusual drops, peak periods, threshold breaches, empty inventory, defect spikes, scheduling risks, traceability gaps, etc.
+2. Highlight actionable insights appropriate to this domain: unusual drops, peak periods, threshold breaches, empty inventory, defect spikes, scheduling risks, traceability gaps, etc.
 3. Use professional Markdown: a concise title (`##`), short executive summary, bullet points for key findings, and a brief recommendations section when appropriate.
 4. Reference specific values from the JSON (dates, line IDs, quantities, rates, device serials) when they support your conclusions.
 5. If the result is empty, zero, or contains no matching records, politely explain that no transaction records match that combination in the database log history. Suggest what the user might adjust (date range, line ID, device serial, product code).

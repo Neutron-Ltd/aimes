@@ -135,6 +135,11 @@ class OrchestratorRequest(BaseModel):
         pattern="^(zh-CN|en-US)$",
         description="Locale for synthesized Markdown report (zh-CN or en-US)",
     )
+    assistant_module: Optional[str] = Field(
+        default=None,
+        pattern="^(production|warehouse|quality|equipment|procurement)$",
+        description="Assistant module context for greeting and report persona",
+    )
 
 
 class ChatMessageCreate(BaseModel):
