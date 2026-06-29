@@ -1,6 +1,7 @@
 """Assistant dashboard snapshot builders."""
 
 from core.dashboard.production import ProductionDashboardBuilder, production_dashboard_builder
+from core.dashboard.quality import QualityDashboardBuilder, quality_dashboard_builder
 from core.dashboard.warehouse import WarehouseDashboardBuilder, warehouse_dashboard_builder
 
 __all__ = [
@@ -8,4 +9,6 @@ __all__ = [
     "production_dashboard_builder",
     "WarehouseDashboardBuilder",
     "warehouse_dashboard_builder",
+    "QualityDashboardBuilder",
+    "quality_dashboard_builder",
 ]

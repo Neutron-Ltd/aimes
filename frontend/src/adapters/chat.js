@@ -3,7 +3,8 @@ import { postQuery } from '../api/query'
 
 const DOMAIN_PREFIX = {
   production: '【AI生产助手】',
-  warehouse: '【AI仓库助手】'
+  warehouse: '【AI仓库助手】',
+  quality: '【AI质量助手】'
 }
 
 /** Strip common Markdown markers for plain-text chat display. */

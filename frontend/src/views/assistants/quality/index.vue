@@ -56,8 +56,7 @@
 import AssistantPageHeader from '../../../components/AssistantPageHeader.vue'
 import AssistantChartMosaic from '../../../components/AssistantChartMosaic.vue'
 import AssistantChatConsole from '../../../components/AssistantChatConsole.vue'
-import { useAssistantPage } from '../../../composables/useAssistantPage'
-import { buildQualityCharts } from './charts'
+import { useQualityAssistantPage } from '../../../composables/useQualityAssistantPage'
 
 const assistantKey = 'quality'
 
@@ -69,5 +68,5 @@ const {
   getChartGridStyle,
   setChartRef,
   t
-} = useAssistantPage(assistantKey, buildQualityCharts)
+} = useQualityAssistantPage()
 </script>

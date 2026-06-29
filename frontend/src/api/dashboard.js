@@ -50,7 +50,7 @@ export async function getAssistantDashboard(
     lookback_days: String(lookbackDays)
   })
 
-  if (module === 'production') {
+  if (module === 'production' || module === 'quality') {
     params.set('line_id', lineId)
   } else if (module === 'warehouse' && whCode) {
     params.set('wh_code', whCode)
