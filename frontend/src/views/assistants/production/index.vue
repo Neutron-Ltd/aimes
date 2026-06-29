@@ -56,8 +56,7 @@
 import AssistantPageHeader from '../../../components/AssistantPageHeader.vue'
 import AssistantChartMosaic from '../../../components/AssistantChartMosaic.vue'
 import AssistantChatConsole from '../../../components/AssistantChatConsole.vue'
-import { useAssistantPage } from '../../../composables/useAssistantPage'
-import { buildProductionCharts } from './charts'
+import { useProductionAssistantPage } from '../../../composables/useProductionAssistantPage'
 
 const assistantKey = 'production'
 
@@ -69,5 +68,5 @@ const {
   getChartGridStyle,
   setChartRef,
   t
-} = useAssistantPage(assistantKey, buildProductionCharts)
+} = useProductionAssistantPage()
 </script>

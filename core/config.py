@@ -2,6 +2,8 @@
 
 from functools import lru_cache
 
+from datetime import date
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -28,6 +30,14 @@ class Settings(BaseSettings):
     )
     db_pool_size: int = 5
     default_workshop_id: str = "WS-001"
+    default_line_id: str = Field(
+        default="FDQ-SMT-3", validation_alias="DEFAULT_LINE_ID"
+    )
+    dashboard_reference_date: date = Field(
+        default=date(2026, 6, 21),
+        validation_alias="DASHBOARD_REFERENCE_DATE",
+        description="Latest MES snapshot date for dashboard lookback windows",
+    )
 
     dashscope_api_key: str = Field(default="", validation_alias="DASHSCOPE_API_KEY")
     bailian_app_id: str = Field(default="", validation_alias="BAILIAN_APP_ID")

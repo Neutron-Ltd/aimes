@@ -3,12 +3,15 @@
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 
+from core.dashboard.production import production_dashboard_builder
+from core.config import get_settings
 from core.chat_store import append_message, clear_history, list_messages
 from core.export.excel import export_to_excel
 from core.export.pdf import export_to_pdf
 from core.rag.ingest import ingest_document
 from core.security import HEADER_WORKSHOP_ID, get_mes_context
 from core.voice.transcribe import transcribe_audio
+from models.dashboard import AssistantDashboardResponse
 from models.schemas import (
     ChatHistoryResponse,
     ChatMessageCreate,
@@ -41,6 +44,46 @@ async def health() -> dict[str, str]:
 
     settings = get_settings()
     return {"status": "ok", "service": "neutron-mes-ai", "version": settings.app_version}
+
+
+@router.get(
+    "/assistants/{module}/dashboard",
+    response_model=AssistantDashboardResponse,
+    summary="Pre-built dashboard snapshot for an assistant module",
+    description=(
+        "Returns KPI and chart slot data for the assistant UI. "
+        "Calls MCP tools directly (no NL parsing). "
+        "Currently implemented: production."
+    ),
+)
+async def get_assistant_dashboard(
+    module: str,
+    request: Request,
+    line_id: str | None = None,
+    locale: str = "zh-CN",
+    lookback_days: int = 7,
+) -> AssistantDashboardResponse:
+    if module != "production":
+        raise HTTPException(
+            status_code=404,
+            detail=f"Dashboard not implemented for module '{module}'",
+        )
+    settings = get_settings()
+    resolved_line = (line_id or settings.default_line_id).strip()
+    if not resolved_line:
+        raise HTTPException(status_code=400, detail="line_id is required")
+    if locale not in ("zh-CN", "en-US"):
+        raise HTTPException(status_code=400, detail="locale must be zh-CN or en-US")
+    if lookback_days < 1 or lookback_days > 90:
+        raise HTTPException(status_code=400, detail="lookback_days must be 1–90")
+
+    context: MCPContext = get_mes_context(request)
+    return await production_dashboard_builder.build(
+        line_id=resolved_line,
+        locale=locale,
+        lookback_days=lookback_days,
+        context=context,
+    )
 
 
 @router.post(

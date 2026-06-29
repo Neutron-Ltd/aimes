@@ -3,15 +3,34 @@ import * as echarts from 'echarts'
 import { useLocale } from './useLocale'
 import '../assets/styles/assistant-dashboard.css'
 
-export function useAssistantPage(assistantKey, buildChartsFn) {
+export function useAssistantPage(assistantKey, buildChartsFn, options = {}) {
+  const { liveKpis, liveChartSlots, insightOverride } = options
   const { locale, t, getAssistantPageConfig } = useLocale()
 
-  const pageConfig = computed(() => getAssistantPageConfig(assistantKey))
+  const pageConfig = computed(() => {
+    const base = getAssistantPageConfig(assistantKey)
+    if (!liveKpis?.value?.length) return base
+
+    const kpis = base.kpis.map((kpi, index) => {
+      const live = liveKpis.value.find((s) => s.index === index)
+      if (live?.source === 'live') {
+        return {
+          ...kpi,
+          value: live.value,
+          trend: live.trend ?? kpi.trend
+        }
+      }
+      return kpi
+    })
+    return { ...base, kpis }
+  })
+
   const charts = computed(() =>
     buildChartsFn(
       pageConfig.value.accent,
       pageConfig.value.chartDefs,
-      t('common.months')
+      t('common.months'),
+      liveChartSlots?.value ?? null
     )
   )
 
@@ -22,9 +41,10 @@ export function useAssistantPage(assistantKey, buildChartsFn) {
   const insightTitle = computed(() =>
     t('common.insightTitle', { title: pageConfig.value.title })
   )
-  const insightText = computed(() =>
-    t('common.insightText', { subtitle: pageConfig.value.subtitle })
-  )
+  const insightText = computed(() => {
+    if (insightOverride?.value) return insightOverride.value
+    return t('common.insightText', { subtitle: pageConfig.value.subtitle })
+  })
 
   const getChartGridStyle = (chart) => ({
     gridColumn: `span ${chart.colSpan ?? 4}`,

@@ -4,7 +4,7 @@ This document describes the new UI design in the `frontend/` folder: what it is,
 
 **Product name (UI):** 宁波睿创 AI 工业大脑 (Ningbo Ruichuang AI Industrial Brain)  
 **Package name:** `mes-ai-client`  
-**Current state:** Presentation-ready UI with mock dashboard data and mock chat replies. Backend integration is planned but not implemented in the active code path.
+**Current state:** Production assistant uses live backend data for dashboard and chat; other assistants use mock data.
 
 ---
 
@@ -233,35 +233,76 @@ Home page also references one **external** portrait URL for the floating AI deco
 
 ---
 
-## Backend Integration Status
+## Backend Integration
 
-The NEUTRON backend (see `docs/readme.md`) exposes:
+Production assistant (`/assistant/production`) is integrated with the NEUTRON backend. Other assistants remain mock-only until their dashboard builders are implemented.
 
-| Endpoint | Purpose |
-|----------|---------|
-| `GET /api/v1/health` | Liveness |
-| `POST /api/v1/query` | Natural-language query → Bailian intent → MCP tools |
-| `POST /api/v1/query/voice` | Voice upload → transcribe → query |
-| `POST /api/v1/rag/ingest` | RAG document ingest |
-| `POST /api/v1/export` | Export results |
+### Environment variables
 
-**Frontend today:**
+Copy [`frontend/.env.example`](frontend/.env.example) to `.env.development` or `.env.local`:
 
-| Area | Status |
-|------|--------|
-| Chat console | Mock replies only (`useAssistantChat.js`) |
-| KPI cards | Static numbers from `assistantKpiValues` |
-| Charts | Static series in each `charts.js` |
-| Insight panel | Template text from i18n, not LLM-generated |
-| API base URL | `frontend/.env.development` defines `VITE_API_BASE_URL=http://127.0.0.1:8000` but **no active code reads it** |
-| Auth headers | Not implemented in running app |
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `VITE_API_BASE_URL` | Backend origin | empty (same-origin / Vite proxy) |
+| `VITE_DEFAULT_LINE_ID` | Production line for dashboard | `FDQ-SMT-3` |
+| `VITE_DEFAULT_WORKSHOP_ID` | Header for chat history APIs | `WS-001` |
+| `VITE_INTEGRATED_ASSISTANTS` | Comma-separated live modules | `production` |
 
-**Recommended integration path:**
+**Standalone repo:** set `VITE_API_BASE_URL=http://127.0.0.1:8000` and ensure backend CORS allows your frontend origin (port 3000 is included).
 
-1. Replace `useAssistantChat.sendMessage` with `fetch(`${import.meta.env.VITE_API_BASE_URL}/api/v1/query`, { body: { query } })`.
-2. Map `assistantKey` to backend intent context or prepend domain hints in the query string.
-3. Render `OrchestratorResponse.result` in chat (and optionally in charts via structured tool output).
-4. Add a Vite dev proxy or nginx reverse proxy so production builds can call `/api/v1/*` on the same origin (as intended by root `docker-compose.yml`).
+Backend optional: `DEFAULT_LINE_ID=FDQ-SMT-3` in root `.env`.
+
+### API endpoints used
+
+| Endpoint | Used by | Purpose |
+|----------|---------|---------|
+| `GET /api/v1/assistants/production/dashboard` | Production dashboard on load | KPI + chart slots (direct MCP, no NL) |
+| `POST /api/v1/query` | Production chat | NL query → Markdown reply |
+| `GET /api/v1/health` | Optional | Liveness check |
+
+### Integration architecture
+
+```
+frontend/src/api/           # HTTP client (repo-independent)
+frontend/src/adapters/      # chartSlots.js (shared), production/* (module-specific)
+frontend/src/composables/
+  useProductionAssistantPage.js   # loads dashboard, merges live data
+  useAssistantChat.js             # routes integrated keys to /query
+  useAssistantPage.js             # optional live KPI/chart refs
+```
+
+**Graceful degradation:** If the dashboard API fails, mock KPIs/charts remain. Slots marked `source: fallback` on the backend also keep mock chart data on the frontend.
+
+**Partial live data:** KPI 在制工单, chart 工单状态分布, and chart OEE趋势 have no MCP tools yet — they stay on mock/demo values.
+
+### Local development (integrated)
+
+Terminal 1 — backend:
+
+```bash
+source .venv/bin/activate
+uvicorn main:app --reload   # http://127.0.0.1:8000
+```
+
+Terminal 2 — frontend (Vite proxies `/api/v1` → backend):
+
+```bash
+cd frontend && npm run dev   # http://localhost:3000
+```
+
+Open `/assistant/production` — dashboard loads from API; chat sends to `/api/v1/query`.
+
+---
+
+## Backend Integration Status (all modules)
+
+| Module | Dashboard API | Chat API |
+|--------|---------------|----------|
+| production | Live (`GET .../production/dashboard`) | Live (`POST /query`) |
+| warehouse | Mock | Mock |
+| quality | Mock | Mock |
+| equipment | Mock | Mock |
+| procurement | Mock | Mock |
 
 ---
 
@@ -290,18 +331,21 @@ frontend/
 ├── index.html
 ├── package.json
 ├── vite.config.js
-├── .env.development          # VITE_API_BASE_URL (unused by current JS path)
+├── .env.example              # VITE_* integration vars
+├── .env.development
 ├── README.md                 # Partially outdated — see notes below
 ├── public/
 │   ├── avatars/              # Assistant PNG avatars
 │   └── effects/
 └── src/
+    ├── api/                  # client.js, query.js, dashboard.js, locale.js, integration.js
+    ├── adapters/             # chartSlots.js, production/dashboard.js, production/chat.js
     ├── main.js               # Entry point
     ├── App.vue
     ├── router/index.js
     ├── i18n/messages.js      # All copy + assistant metadata
     ├── data/assistantConfigs.js   # Legacy aggregator (prefer useLocale)
-    ├── composables/          # useLocale, useAssistantPage, useAssistantChat
+    ├── composables/          # useLocale, useAssistantPage, useAssistantChat, useProductionAssistantPage
     ├── components/           # Shell, header, charts, chat
     ├── views/
     │   ├── Index.vue
@@ -338,6 +382,6 @@ Items to be aware of when continuing development:
 
 ## Summary
 
-The new frontend is a polished **Vue 3 + Vite + Element Plus + ECharts** showcase for five manufacturing AI assistants. Architecture is clean and modular: shared shell, per-assistant views, centralized i18n, reusable chart and chat components. It is ready for visual review and UX iteration; the main remaining engineering work is **connecting chat and dashboards to the FastAPI backend** (`/api/v1/query` and related endpoints) and replacing mock KPI/chart data with tool results.
+The frontend is a **Vue 3 + Vite + Element Plus + ECharts** showcase for five manufacturing AI assistants. **Production** is wired to the FastAPI backend; remaining assistants use mock data until their dashboard builders are added.
 
 For backend API details, intent routing, and test queries, see [readme.md](./readme.md), [mesai-mcp-1.1.md](./mesai-mcp-1.1.md), and [mesai-query-1.1.md](./mesai-query-1.1.md).

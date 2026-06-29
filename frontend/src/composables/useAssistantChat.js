@@ -1,12 +1,14 @@
 import { useLocale } from './useLocale'
+import { isAssistantIntegrated } from '../api/integration'
+import { sendIntegratedChat } from '../adapters/production/chat'
 
 const MOCK_DELAY_MS = 1000
 
 /**
- * AI 问答逻辑 — 后期接入后端只需修改此文件
+ * AI 问答逻辑 — integrated assistants call POST /api/v1/query
  */
 export function useAssistantChat(assistantKey) {
-  const { t } = useLocale()
+  const { t, locale } = useLocale()
 
   function getMockReply(message) {
     return t(`assistants.${assistantKey}.mockReply`, { message })
@@ -18,7 +20,6 @@ export function useAssistantChat(assistantKey) {
   }
 
   /**
-   * 发送用户输入的消息
    * @param {string} message
    * @returns {Promise<string|null>}
    */
@@ -26,21 +27,15 @@ export function useAssistantChat(assistantKey) {
     const text = message?.trim()
     if (!text) return null
 
-    // TODO: 接入后端 API 后替换下方模拟逻辑
-    // const res = await fetch('/api/assistant/chat', {
-    //   method: 'POST',
-    //   headers: { 'Content-Type': 'application/json' },
-    //   body: JSON.stringify({ assistantKey, message: text })
-    // })
-    // const data = await res.json()
-    // return data.reply
+    if (isAssistantIntegrated(assistantKey)) {
+      return sendIntegratedChat(assistantKey, text, locale.value)
+    }
 
     await waitMockLatency()
     return getMockReply(text)
   }
 
   /**
-   * 点击快捷提问
    * @param {string} prompt
    * @returns {Promise<string|null>}
    */
