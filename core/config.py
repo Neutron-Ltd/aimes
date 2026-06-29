@@ -3,6 +3,7 @@
 from functools import lru_cache
 
 from datetime import date
+from typing import Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -32,6 +33,9 @@ class Settings(BaseSettings):
     default_workshop_id: str = "WS-001"
     default_line_id: str = Field(
         default="FDQ-SMT-3", validation_alias="DEFAULT_LINE_ID"
+    )
+    default_wh_code: Optional[str] = Field(
+        default=None, validation_alias="DEFAULT_WH_CODE"
     )
     dashboard_reference_date: date = Field(
         default=date(2026, 6, 21),

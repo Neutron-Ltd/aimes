@@ -8,6 +8,8 @@ export const DEFAULT_WORKSHOP_ID =
 export const DEFAULT_LINE_ID =
   import.meta.env.VITE_DEFAULT_LINE_ID ?? 'FDQ-SMT-3'
 
+export const DEFAULT_WH_CODE = import.meta.env.VITE_DEFAULT_WH_CODE ?? ''
+
 export class ApiError extends Error {
   constructor(message, { status, detail } = {}) {
     super(message)

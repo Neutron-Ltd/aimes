@@ -1,4 +1,4 @@
-import { apiFetch, DEFAULT_LINE_ID } from './client'
+import { apiFetch, DEFAULT_LINE_ID, DEFAULT_WH_CODE } from './client'
 import { toApiLocale } from './locale'
 
 /**
@@ -22,7 +22,8 @@ import { toApiLocale } from './locale'
 /**
  * @typedef {Object} AssistantDashboardResponse
  * @property {string} module
- * @property {string} line_id
+ * @property {string|null} [line_id]
+ * @property {string|null} [wh_code]
  * @property {DashboardKpiSlot[]} kpis
  * @property {DashboardChartSlot[]} charts
  * @property {string|null} insight
@@ -32,17 +33,28 @@ import { toApiLocale } from './locale'
 
 /**
  * @param {string} module
- * @param {{ lineId?: string, locale?: string, lookbackDays?: number }} [options]
+ * @param {{ lineId?: string, whCode?: string, locale?: string, lookbackDays?: number }} [options]
  * @returns {Promise<AssistantDashboardResponse>}
  */
 export async function getAssistantDashboard(
   module,
-  { lineId = DEFAULT_LINE_ID, locale = 'zh', lookbackDays = 7 } = {}
+  {
+    lineId = DEFAULT_LINE_ID,
+    whCode = DEFAULT_WH_CODE,
+    locale = 'zh',
+    lookbackDays = 7
+  } = {}
 ) {
   const params = new URLSearchParams({
-    line_id: lineId,
     locale: toApiLocale(locale),
     lookback_days: String(lookbackDays)
   })
+
+  if (module === 'production') {
+    params.set('line_id', lineId)
+  } else if (module === 'warehouse' && whCode) {
+    params.set('wh_code', whCode)
+  }
+
   return apiFetch(`/api/v1/assistants/${module}/dashboard?${params}`)
 }

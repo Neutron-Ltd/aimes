@@ -32,7 +32,8 @@ class DashboardChartSlot(BaseModel):
 
 class AssistantDashboardResponse(BaseModel):
     module: str
-    line_id: str
+    line_id: Optional[str] = None
+    wh_code: Optional[str] = None
     kpis: list[DashboardKpiSlot]
     charts: list[DashboardChartSlot]
     insight: Optional[str] = None

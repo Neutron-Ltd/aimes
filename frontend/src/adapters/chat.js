@@ -1,8 +1,9 @@
-import { ApiError } from '../../api/client'
-import { postQuery } from '../../api/query'
+import { ApiError } from '../api/client'
+import { postQuery } from '../api/query'
 
 const DOMAIN_PREFIX = {
-  production: '【AI生产助手】'
+  production: '【AI生产助手】',
+  warehouse: '【AI仓库助手】'
 }
 
 /** Strip common Markdown markers for plain-text chat display. */

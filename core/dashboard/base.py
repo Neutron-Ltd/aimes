@@ -6,7 +6,6 @@ from datetime import date, datetime, timedelta
 from typing import Any, Optional, Protocol
 
 from core.config import get_settings
-
 from models.dashboard import (
     AssistantDashboardResponse,
     DashboardChartSlot,

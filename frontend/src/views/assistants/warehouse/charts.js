@@ -3,9 +3,14 @@
  */
 import { barChart, gaugeChart, lineChart } from '../../../utils/chartPresets'
 import { buildMosaicCharts } from '../../../utils/chartMosaicLayout'
+import { chartOptionFromSlot, findLiveChartSlot } from '../../../adapters/chartSlots'
 
-export function buildWarehouseCharts(accent, chartDefs, months) {
+export function buildWarehouseCharts(accent, chartDefs, months, liveSlots = null) {
   return buildMosaicCharts(chartDefs, (index, def) => {
+    const live = findLiveChartSlot(liveSlots, index)
+    const liveOption = chartOptionFromSlot(live, accent, def, months)
+    if (liveOption) return liveOption
+
     switch (index) {
       case 0:
         return barChart({ accent, data: [58, 76, 64, 88, 72, 95], xData: months })

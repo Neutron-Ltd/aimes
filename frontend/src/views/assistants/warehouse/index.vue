@@ -56,8 +56,7 @@
 import AssistantPageHeader from '../../../components/AssistantPageHeader.vue'
 import AssistantChartMosaic from '../../../components/AssistantChartMosaic.vue'
 import AssistantChatConsole from '../../../components/AssistantChatConsole.vue'
-import { useAssistantPage } from '../../../composables/useAssistantPage'
-import { buildWarehouseCharts } from './charts'
+import { useWarehouseAssistantPage } from '../../../composables/useWarehouseAssistantPage'
 
 const assistantKey = 'warehouse'
 
@@ -69,5 +68,5 @@ const {
   getChartGridStyle,
   setChartRef,
   t
-} = useAssistantPage(assistantKey, buildWarehouseCharts)
+} = useWarehouseAssistantPage()
 </script>

@@ -1,6 +1,6 @@
 import { useLocale } from './useLocale'
 import { isAssistantIntegrated } from '../api/integration'
-import { sendIntegratedChat } from '../adapters/production/chat'
+import { sendIntegratedChat } from '../adapters/chat'
 
 const MOCK_DELAY_MS = 1000
 
