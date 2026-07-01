@@ -21,7 +21,7 @@ export function buildProductionCharts(accent, chartDefs, months, liveSlots = nul
       case 3:
         return barChart({ accent, xData: def.xData, data: [88, 92, 76, 84, 79] })
       case 4:
-        return lineChart({ accent, data: [74, 78, 81, 83, 85, 87], xData: months })
+        return lineChart({ accent, data: [42, 38, 35, 28, 31, 24], xData: months })
       default:
         return barChart({ accent, xData: def.xData, data: [32, 24, 18, 12, 8] })
     }

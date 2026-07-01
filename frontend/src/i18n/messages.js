@@ -45,7 +45,7 @@ export const messages = {
           { title: '工单状态分布', xData: ['待排产', '生产中', '待检', '已完成', '暂停'] },
           { title: '产能负荷' },
           { title: '产线负荷对比', xData: ['一线', '二线', '三线', '四线', '五线'] },
-          { title: 'OEE趋势' },
+          { title: '不良品分析' },
           { title: '异常停机分析', xData: ['换型', '缺料', '故障', '待检', '其他'] }
         ]
       },
@@ -165,7 +165,7 @@ export const messages = {
           { title: 'Work Order Status', xData: ['Pending', 'In Progress', 'QC', 'Done', 'Hold'] },
           { title: 'Capacity Load' },
           { title: 'Line Load Comparison', xData: ['Line 1', 'Line 2', 'Line 3', 'Line 4', 'Line 5'] },
-          { title: 'OEE Trend' },
+          { title: 'Defect Analysis' },
           { title: 'Downtime Analysis', xData: ['Changeover', 'Material', 'Fault', 'QC', 'Other'] }
         ]
       },

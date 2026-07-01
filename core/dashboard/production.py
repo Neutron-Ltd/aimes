@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Optional
 
+from sqlalchemy import text
+
+from core.config import get_settings
 from core.dashboard.base import (
     bucket_label,
     fallback_chart,
@@ -16,6 +19,7 @@ from core.dashboard.base import (
     resolve_date_range,
     tool_data,
 )
+from core.db import get_session
 from models.dashboard import (
     AssistantDashboardResponse,
     DashboardChartSlot,
@@ -39,6 +43,80 @@ from mcp_tools.production_tools import (
     get_yield_anomalies_tool,
 )
 
+DEFECT_CHART_MONTHS = 6
+
+
+def _month_window(months: int) -> tuple[datetime, datetime]:
+    settings = get_settings()
+    ref_end = settings.dashboard_reference_date
+    end_day = min(date.today(), ref_end)
+    end = datetime.combine(end_day, datetime.max.time()).replace(microsecond=0)
+    year, month = end.year, end.month
+    start_month = month - (months - 1)
+    start_year = year
+    while start_month <= 0:
+        start_month += 12
+        start_year -= 1
+    start = datetime.combine(date(start_year, start_month, 1), datetime.min.time())
+    return start, end
+
+
+def _month_bucket_label(bucket: Any, locale: str) -> str:
+    if bucket is None:
+        return ""
+    if isinstance(bucket, datetime):
+        dt = bucket
+    else:
+        text_val = str(bucket)
+        try:
+            dt = datetime.fromisoformat(text_val.replace("Z", "+00:00"))
+        except ValueError:
+            return text_val[:7]
+    if locale.startswith("zh"):
+        return f"{dt.month}月"
+    return dt.strftime("%b")
+
+
+async def _fetch_monthly_defect_counts(
+    line_id: str,
+    locale: str,
+    months: int = DEFECT_CHART_MONTHS,
+) -> tuple[list[str], list[float]]:
+    start, end = _month_window(months)
+    session = await get_session()
+    try:
+        sql = text(
+            """
+            SELECT date_trunc('month', COALESCE(wd.in_time, wd.create_time)) AS bucket,
+                   SUM(COALESCE(wd.ng_qty, 0) + COALESCE(wd.scrap_qty, 0)) AS defect_qty
+            FROM n2admin.t_wip_detail wd
+            JOIN n2admin.t_co_area ws ON wd.work_stationsn = ws.area_sn
+            JOIN n2admin.t_co_area line ON ws.parent_sn = line.area_sn
+            WHERE line.area_sn = :line_id
+              AND COALESCE(wd.in_time, wd.create_time) BETWEEN :start_date AND :end_date
+            GROUP BY date_trunc('month', COALESCE(wd.in_time, wd.create_time))
+            ORDER BY bucket
+            """
+        )
+        rows = (
+            await session.execute(
+                sql,
+                {"line_id": line_id, "start_date": start, "end_date": end},
+            )
+        ).mappings().all()
+    finally:
+        await session.close()
+
+    labels: list[str] = []
+    series: list[float] = []
+    for row in rows:
+        qty = float(row.get("defect_qty") or 0)
+        if qty <= 0:
+            continue
+        labels.append(_month_bucket_label(row.get("bucket"), locale))
+        series.append(round(qty, 1))
+    return labels, series
+
 
 class ProductionDashboardBuilder:
     async def build(
@@ -58,6 +136,7 @@ class ProductionDashboardBuilder:
             device_rates,
             capacity,
             anomalies,
+            monthly_defects,
         ) = await asyncio.gather(
             get_yield_aggregation_tool.run(
                 YieldAggregationParams(
@@ -114,7 +193,10 @@ class ProductionDashboardBuilder:
                 ),
                 context,
             ),
+            _fetch_monthly_defect_counts(line_id, locale),
         )
+
+        defect_labels, defect_series = monthly_defects
 
         kpis = self._build_kpis(
             achievement_total, achievement_prev, device_rates, locale
@@ -124,6 +206,8 @@ class ProductionDashboardBuilder:
             device_rates,
             capacity,
             anomalies,
+            defect_labels,
+            defect_series,
             locale,
         )
         partial = any(
@@ -200,6 +284,8 @@ class ProductionDashboardBuilder:
         device_rates: Any,
         capacity: Any,
         anomalies: Any,
+        defect_labels: list[str],
+        defect_series: list[float],
         locale: str,
     ) -> list[DashboardChartSlot]:
         charts: list[DashboardChartSlot] = []
@@ -263,8 +349,18 @@ class ProductionDashboardBuilder:
         else:
             charts.append(fallback_chart(3, "bar"))
 
-        # OEE daily trend — device rate tool has no daily breakdown
-        charts.append(fallback_chart(4, "line"))
+        if defect_series:
+            charts.append(
+                DashboardChartSlot(
+                    index=4,
+                    chart_type="line",
+                    x_data=defect_labels,
+                    series=defect_series,
+                    source=DataSource.LIVE,
+                )
+            )
+        else:
+            charts.append(fallback_chart(4, "line"))
 
         anom_data = tool_data(anomalies)
         nested = (anom_data or {}).get("result") or {}
