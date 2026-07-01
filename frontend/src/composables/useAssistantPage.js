@@ -46,6 +46,7 @@ export function useAssistantPage(assistantKey, buildChartsFn, options = {}) {
   const chartRefs = ref([])
   const chartInstances = ref([])
   const resizeObservers = []
+  const resizeRafIds = []
 
   const insightTitle = computed(() =>
     t('common.insightTitle', { title: pageConfig.value.title })
@@ -61,6 +62,11 @@ export function useAssistantPage(assistantKey, buildChartsFn, options = {}) {
   })
 
   const disposeChartAt = (index) => {
+    if (resizeRafIds[index]) {
+      cancelAnimationFrame(resizeRafIds[index])
+      delete resizeRafIds[index]
+    }
+
     resizeObservers[index]?.disconnect()
     delete resizeObservers[index]
 
@@ -86,20 +92,19 @@ export function useAssistantPage(assistantKey, buildChartsFn, options = {}) {
     chartInstances.value[index] = instance
 
     resizeObservers[index] = new ResizeObserver(() => {
-      instance.resize()
+      if (resizeRafIds[index]) return
+      resizeRafIds[index] = requestAnimationFrame(() => {
+        delete resizeRafIds[index]
+        instance.resize()
+      })
     })
     resizeObservers[index].observe(el)
     requestAnimationFrame(() => instance.resize())
   }
 
   const setChartRef = (el, index) => {
-    if (dashboardLoading?.value) {
-      if (!el) disposeChartAt(index)
-      return
-    }
     if (el) {
       chartRefs.value[index] = el
-      mountChartAt(el, index)
       return
     }
 
@@ -107,12 +112,15 @@ export function useAssistantPage(assistantKey, buildChartsFn, options = {}) {
     delete chartRefs.value[index]
   }
 
-  const renderCharts = async () => {
+  const staggerRenderCharts = async () => {
     await nextTick()
-    chartRefs.value.forEach((el, index) => {
-      if (el) mountChartAt(el, index)
-    })
-    requestAnimationFrame(resizeCharts)
+    for (let i = 0; i < chartRefs.value.length; i++) {
+      const el = chartRefs.value[i]
+      if (el && charts.value[i]?.option) {
+        mountChartAt(el, i)
+        await new Promise((resolve) => requestAnimationFrame(resolve))
+      }
+    }
   }
 
   const resizeCharts = () => {
@@ -120,30 +128,28 @@ export function useAssistantPage(assistantKey, buildChartsFn, options = {}) {
   }
 
   const disposeAllCharts = () => {
+    resizeRafIds.forEach((id) => cancelAnimationFrame(id))
+    resizeRafIds.length = 0
     resizeObservers.forEach((observer) => observer?.disconnect())
     resizeObservers.length = 0
     chartInstances.value.forEach((chart) => chart?.dispose())
     chartInstances.value = []
-    chartRefs.value = []
   }
 
   watch(locale, () => {
-    if (!dashboardLoading?.value) renderCharts()
+    if (!dashboardLoading?.value) staggerRenderCharts()
   })
-  watch(charts, () => {
-    if (!dashboardLoading?.value) renderCharts()
-  }, { deep: true, flush: 'post' })
   watch(dashboardLoading, async (isLoading) => {
     if (isLoading) {
       disposeAllCharts()
       return
     }
-    await renderCharts()
+    await staggerRenderCharts()
   })
 
   onMounted(() => {
     if (!dashboardLoading?.value) {
-      renderCharts()
+      staggerRenderCharts()
     }
     window.addEventListener('resize', resizeCharts)
   })

@@ -814,6 +814,7 @@
   width: 100%;
   min-height: 0;
   height: 100%;
+  position: relative;
 }
 
 .chart-mosaic-item--lg .chart-title span {
@@ -1044,34 +1045,18 @@
   }
 }
 
-.report-panel--loading {
-  min-height: 420px;
-}
-
-.dashboard-loading-label {
-  margin: 0 0 0.75rem;
-  font-size: 0.85rem;
-  color: rgba(148, 163, 184, 0.95);
-}
-
 .dashboard-error-alert {
   margin-bottom: 1rem;
 }
 
-.kpi-card--skeleton .el-skeleton,
-.insight-card--skeleton .el-skeleton {
-  --el-skeleton-color: rgba(51, 65, 85, 0.45);
-  --el-skeleton-to-color: rgba(71, 85, 105, 0.55);
-}
-
-.chart-mosaic--skeleton {
-  display: grid;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.chart-box--skeleton {
-  min-height: 140px;
-  padding: 0.5rem 0;
+.chart-loading-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  color: rgba(148, 163, 184, 0.95);
+  pointer-events: none;
+  user-select: none;
 }

@@ -12,7 +12,11 @@
           <span>{{ chart.title }}</span>
           <small>{{ aiAnalysisLabel }}</small>
         </div>
-        <div :ref="(el) => setChartRef(el, index)" class="chart-box"></div>
+        <div :ref="(el) => setChartRef(el, index)" class="chart-box">
+          <span v-if="loading || !chart.option" class="chart-loading-text">
+            {{ loadingLabel }}
+          </span>
+        </div>
       </el-card>
     </div>
   </div>
@@ -31,6 +35,14 @@ defineProps({
   aiAnalysisLabel: {
     type: String,
     required: true
+  },
+  loadingLabel: {
+    type: String,
+    required: true
+  },
+  loading: {
+    type: Boolean,
+    default: false
   },
   getChartGridStyle: {
     type: Function,
