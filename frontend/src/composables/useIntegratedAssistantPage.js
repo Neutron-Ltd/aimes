@@ -16,7 +16,7 @@ export function useIntegratedAssistantPage({
   const liveKpis = ref(null)
   const liveChartSlots = ref(null)
   const insightOverride = ref(null)
-  const loading = ref(false)
+  const loading = ref(true)
   const error = ref(null)
 
   const { locale } = useLocale()
@@ -24,7 +24,8 @@ export function useIntegratedAssistantPage({
   const page = useAssistantPage(assistantKey, buildChartsFn, {
     liveKpis,
     liveChartSlots,
-    insightOverride
+    insightOverride,
+    dashboardLoading: loading
   })
 
   async function loadDashboard() {

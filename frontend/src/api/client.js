@@ -43,6 +43,9 @@ export async function apiFetch(path, init = {}) {
   try {
     response = await fetch(url, { ...init, headers })
   } catch (err) {
+    if (err?.name === 'AbortError') {
+      throw err
+    }
     const msg = err?.message || 'Network error'
     if (msg === 'Failed to fetch' || msg.includes('NetworkError')) {
       throw new ApiError(

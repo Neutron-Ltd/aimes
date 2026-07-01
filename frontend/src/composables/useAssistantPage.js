@@ -1,10 +1,11 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as echarts from 'echarts'
 import { useLocale } from './useLocale'
+import { defaultMosaicLayout } from '../utils/chartMosaicLayout'
 import '../assets/styles/assistant-dashboard.css'
 
 export function useAssistantPage(assistantKey, buildChartsFn, options = {}) {
-  const { liveKpis, liveChartSlots, insightOverride } = options
+  const { liveKpis, liveChartSlots, insightOverride, dashboardLoading } = options
   const { locale, t, getAssistantPageConfig } = useLocale()
 
   const pageConfig = computed(() => {
@@ -25,14 +26,22 @@ export function useAssistantPage(assistantKey, buildChartsFn, options = {}) {
     return { ...base, kpis }
   })
 
-  const charts = computed(() =>
-    buildChartsFn(
+  const charts = computed(() => {
+    if (dashboardLoading?.value) {
+      const defs = pageConfig.value.chartDefs || []
+      return defaultMosaicLayout.map((layout, index) => ({
+        title: defs[index]?.title ?? `Chart ${index + 1}`,
+        ...layout,
+        option: null
+      }))
+    }
+    return buildChartsFn(
       pageConfig.value.accent,
       pageConfig.value.chartDefs,
       t('common.months'),
       liveChartSlots?.value ?? null
     )
-  )
+  })
 
   const chartRefs = ref([])
   const chartInstances = ref([])
@@ -63,6 +72,7 @@ export function useAssistantPage(assistantKey, buildChartsFn, options = {}) {
   }
 
   const mountChartAt = (el, index) => {
+    if (dashboardLoading?.value) return
     const chart = charts.value[index]
     if (!el || !chart?.option) return
 
@@ -83,6 +93,10 @@ export function useAssistantPage(assistantKey, buildChartsFn, options = {}) {
   }
 
   const setChartRef = (el, index) => {
+    if (dashboardLoading?.value) {
+      if (!el) disposeChartAt(index)
+      return
+    }
     if (el) {
       chartRefs.value[index] = el
       mountChartAt(el, index)
@@ -113,11 +127,24 @@ export function useAssistantPage(assistantKey, buildChartsFn, options = {}) {
     chartRefs.value = []
   }
 
-  watch(locale, renderCharts)
-  watch(charts, renderCharts, { deep: true, flush: 'post' })
+  watch(locale, () => {
+    if (!dashboardLoading?.value) renderCharts()
+  })
+  watch(charts, () => {
+    if (!dashboardLoading?.value) renderCharts()
+  }, { deep: true, flush: 'post' })
+  watch(dashboardLoading, async (isLoading) => {
+    if (isLoading) {
+      disposeAllCharts()
+      return
+    }
+    await renderCharts()
+  })
 
   onMounted(() => {
-    renderCharts()
+    if (!dashboardLoading?.value) {
+      renderCharts()
+    }
     window.addEventListener('resize', resizeCharts)
   })
 

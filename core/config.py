@@ -62,6 +62,29 @@ class Settings(BaseSettings):
         description="SQLite file for per-workshop chat history (writable, separate from MES PostgreSQL)",
     )
 
+    dashboard_cache_enabled: bool = Field(
+        default=True,
+        validation_alias="DASHBOARD_CACHE_ENABLED",
+    )
+    dashboard_cache_db_path: str = Field(
+        default="./data/dashboard_cache.db",
+        validation_alias="DASHBOARD_CACHE_DB_PATH",
+    )
+    dashboard_cache_ttl_seconds: int = Field(
+        default=900,
+        validation_alias="DASHBOARD_CACHE_TTL_SECONDS",
+        description="Fresh window for cached dashboard snapshots (default 15 min)",
+    )
+    dashboard_cache_stale_ok: bool = Field(
+        default=True,
+        validation_alias="DASHBOARD_CACHE_STALE_OK",
+        description="Serve stale snapshots while revalidating in background",
+    )
+    dashboard_cache_refresh_interval_seconds: int = Field(
+        default=3600,
+        validation_alias="DASHBOARD_CACHE_REFRESH_INTERVAL_SECONDS",
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:

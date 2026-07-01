@@ -19,9 +19,10 @@ COPY core/ core/
 COPY mcp_tools/ mcp_tools/
 COPY models/ models/
 COPY orchestrator/ orchestrator/
+COPY scripts/ scripts/
 COPY main.py .
 
-RUN mkdir -p /app/data/chroma
+RUN mkdir -p /app/data
 
 EXPOSE 8000
 

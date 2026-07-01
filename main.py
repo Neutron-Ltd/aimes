@@ -15,6 +15,10 @@ from fastapi.responses import RedirectResponse
 from api.routes import router
 from core.config import get_settings
 from core.db import close_db, init_db
+from core.dashboard_cache.scheduler import (
+    start_dashboard_cache_scheduler,
+    stop_dashboard_cache_scheduler,
+)
 from core.logging import setup_logging
 from core.security import RBACMiddleware
 
@@ -23,7 +27,9 @@ from core.security import RBACMiddleware
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     setup_logging()
     await init_db()
+    start_dashboard_cache_scheduler()
     yield
+    await stop_dashboard_cache_scheduler()
     await close_db()
 
 

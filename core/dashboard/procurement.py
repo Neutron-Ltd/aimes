@@ -63,10 +63,7 @@ async def _fetch_receive_docs(
     return [dict(r) for r in rows]
 
 
-async def _fetch_receive_summary(
-    wh_code: Optional[str], start: datetime, end: datetime
-) -> dict[str, Any]:
-    rows = await _fetch_receive_docs(wh_code, start, end)
+def _summarize_receive_docs(rows: list[dict[str, Any]]) -> dict[str, Any]:
     total = len(rows)
     on_time = 0
     supplier_stats: dict[str, dict[str, int]] = defaultdict(
@@ -103,6 +100,32 @@ async def _fetch_receive_summary(
         "risk_suppliers": risk_count,
         "supplier_stats": dict(supplier_stats),
     }
+
+
+def _stability_from_receive_docs(rows: list[dict[str, Any]]) -> Optional[float]:
+    if len(rows) < 2:
+        return None
+
+    late_flags: list[float] = []
+    for row in rows:
+        plan = row.get("plan_receive_date")
+        received = row.get("receive_date")
+        if not plan or not received:
+            continue
+        late_flags.append(0.0 if received <= plan else 1.0)
+
+    if not late_flags:
+        return None
+
+    late_rate = sum(late_flags) / len(late_flags)
+    return round(max(100.0 - late_rate * 100.0, 0.0), 1)
+
+
+async def _fetch_receive_summary(
+    wh_code: Optional[str], start: datetime, end: datetime
+) -> dict[str, Any]:
+    rows = await _fetch_receive_docs(wh_code, start, end)
+    return _summarize_receive_docs(rows)
 
 
 async def _fetch_spend_totals(
@@ -195,16 +218,14 @@ async def _fetch_daily_spend(
 
 
 async def _fetch_supplier_scores(
-    wh_code: Optional[str], start: datetime, end: datetime
+    supplier_stats: dict[str, dict[str, int]],
 ) -> tuple[list[str], list[float]]:
-    summary = await _fetch_receive_summary(wh_code, start, end)
-    stats = summary.get("supplier_stats") or {}
-    if not stats:
+    if not supplier_stats:
         return [], []
 
     session = await get_session()
     try:
-        codes = list(stats.keys())[:20]
+        codes = list(supplier_stats.keys())[:20]
         placeholders = ", ".join(f":s{i}" for i in range(len(codes)))
         bind = {f"s{i}": code for i, code in enumerate(codes)}
         name_map: dict[str, str] = {}
@@ -229,7 +250,7 @@ async def _fetch_supplier_scores(
         await session.close()
 
     scored: list[tuple[str, float, int]] = []
-    for code, data in stats.items():
+    for code, data in supplier_stats.items():
         total = int(data.get("total") or 0)
         if total < 1:
             continue
@@ -241,28 +262,6 @@ async def _fetch_supplier_scores(
     labels = [name_map.get(code, code[:12]) for code, _, _ in top]
     series = [score for _, score, _ in top]
     return labels, series
-
-
-async def _fetch_stability_score(
-    wh_code: Optional[str], start: datetime, end: datetime
-) -> Optional[float]:
-    rows = await _fetch_receive_docs(wh_code, start, end)
-    if len(rows) < 2:
-        return None
-
-    late_flags: list[float] = []
-    for row in rows:
-        plan = row.get("plan_receive_date")
-        received = row.get("receive_date")
-        if not plan or not received:
-            continue
-        late_flags.append(0.0 if received <= plan else 1.0)
-
-    if not late_flags:
-        return None
-
-    late_rate = sum(late_flags) / len(late_flags)
-    return round(max(100.0 - late_rate * 100.0, 0.0), 1)
 
 
 async def _fetch_lead_time_by_abc(
@@ -356,21 +355,21 @@ class ProcurementDashboardBuilder:
         start, end = resolve_date_range(lookback_days)
         prev_start, prev_end = previous_period(start, end)
 
+        receive_rows = await _fetch_receive_docs(wh_code, start, end)
+        receive_summary = _summarize_receive_docs(receive_rows)
+        stability = _stability_from_receive_docs(receive_rows)
+
         (
-            receive_summary,
             spend_comparison,
             daily_spend,
             supplier_scores,
-            stability,
             lead_time_abc,
             kit_rate,
             inventory_result,
         ) = await asyncio.gather(
-            _fetch_receive_summary(wh_code, start, end),
             _fetch_spend_comparison(wh_code, start, end, prev_start, prev_end),
             _fetch_daily_spend(wh_code, start, end),
-            _fetch_supplier_scores(wh_code, start, end),
-            _fetch_stability_score(wh_code, start, end),
+            _fetch_supplier_scores(receive_summary.get("supplier_stats") or {}),
             _fetch_lead_time_by_abc(wh_code, start, end, locale),
             _fetch_kit_rate(wh_code),
             get_inventory_status_tool.run(

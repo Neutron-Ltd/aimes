@@ -1,5 +1,7 @@
-import { apiFetch, DEFAULT_LINE_ID, DEFAULT_WH_CODE } from './client'
+import { apiFetch, ApiError, DEFAULT_LINE_ID, DEFAULT_WH_CODE } from './client'
 import { toApiLocale } from './locale'
+
+const DASHBOARD_TIMEOUT_MS = 60_000
 
 /**
  * @typedef {Object} DashboardKpiSlot
@@ -56,5 +58,21 @@ export async function getAssistantDashboard(
     params.set('wh_code', whCode)
   }
 
-  return apiFetch(`/api/v1/assistants/${module}/dashboard?${params}`)
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), DASHBOARD_TIMEOUT_MS)
+
+  try {
+    return await apiFetch(`/api/v1/assistants/${module}/dashboard?${params}`, {
+      signal: controller.signal
+    })
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      throw new ApiError('Dashboard request timed out. Please retry.', {
+        detail: 'timeout'
+      })
+    }
+    throw err
+  } finally {
+    clearTimeout(timeoutId)
+  }
 }

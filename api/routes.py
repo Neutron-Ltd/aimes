@@ -1,6 +1,9 @@
 """HTTP endpoints for the NEUTRON MES AI Assistant (v0.3)."""
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+import asyncio
+from typing import Optional
+
+from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
 
 from core.dashboard.production import production_dashboard_builder
@@ -9,6 +12,14 @@ from core.dashboard.quality import quality_dashboard_builder
 from core.dashboard.equipment import equipment_dashboard_builder
 from core.dashboard.procurement import procurement_dashboard_builder
 from core.config import get_settings
+from core.dashboard_cache.service import (
+    CacheStatus,
+    build_dashboard_response,
+    build_scope_key,
+    get_cached_dashboard,
+    put_cached_dashboard,
+    refresh_dashboard_module,
+)
 from core.chat_store import append_message, clear_history, list_messages
 from core.export.excel import export_to_excel
 from core.export.pdf import export_to_pdf
@@ -50,6 +61,80 @@ def _require_workshop_id(context: MCPContext) -> str:
     return workshop_id
 
 
+def _resolve_dashboard_params(
+    module: str,
+    line_id: str | None,
+    wh_code: str | None,
+) -> tuple[Optional[str], Optional[str], str]:
+    settings = get_settings()
+
+    if module == "production":
+        resolved_line = (line_id or settings.default_line_id).strip()
+        if not resolved_line:
+            raise HTTPException(status_code=400, detail="line_id is required")
+        return resolved_line, None, build_scope_key(module, line_id=resolved_line)
+
+    if module in ("quality", "equipment"):
+        resolved_line = (line_id or settings.default_line_id or "").strip() or None
+        return resolved_line, None, build_scope_key(module, line_id=resolved_line)
+
+    resolved_wh = wh_code if wh_code is not None else settings.default_wh_code
+    if resolved_wh is not None:
+        resolved_wh = resolved_wh.strip() or None
+    return None, resolved_wh, build_scope_key(module, wh_code=resolved_wh)
+
+
+async def _build_and_cache_dashboard(
+    module: str,
+    *,
+    line_id: Optional[str],
+    wh_code: Optional[str],
+    scope_key: str,
+    locale: str,
+    lookback_days: int,
+    context: MCPContext,
+) -> AssistantDashboardResponse:
+    response = await build_dashboard_response(
+        module,
+        line_id=line_id,
+        wh_code=wh_code,
+        locale=locale,
+        lookback_days=lookback_days,
+        context=context,
+    )
+    await put_cached_dashboard(module, scope_key, locale, lookback_days, response)
+    return response
+
+
+def _schedule_dashboard_revalidation(
+    module: str,
+    *,
+    line_id: Optional[str],
+    wh_code: Optional[str],
+    locale: str,
+    lookback_days: int,
+    context: MCPContext,
+) -> None:
+    async def _revalidate() -> None:
+        try:
+            await refresh_dashboard_module(
+                module,
+                line_id=line_id,
+                wh_code=wh_code,
+                locale=locale,
+                lookback_days=lookback_days,
+                context=context,
+            )
+        except Exception:
+            from core.logging import get_logger
+
+            get_logger(__name__).exception(
+                "Background dashboard revalidation failed for %s", module
+            )
+
+    asyncio.create_task(_revalidate())
+
+
 @router.get("/health", summary="Health check")
 async def health() -> dict[str, str]:
     from core.config import get_settings
@@ -71,6 +156,7 @@ async def health() -> dict[str, str]:
 async def get_assistant_dashboard(
     module: str,
     request: Request,
+    response: Response,
     line_id: str | None = None,
     wh_code: str | None = None,
     locale: str = "zh-CN",
@@ -87,43 +173,36 @@ async def get_assistant_dashboard(
     if lookback_days < 1 or lookback_days > 90:
         raise HTTPException(status_code=400, detail="lookback_days must be 1–90")
 
-    settings = get_settings()
     context: MCPContext = get_mes_context(request)
+    resolved_line, resolved_wh, scope_key = _resolve_dashboard_params(
+        module, line_id, wh_code
+    )
 
-    if module == "production":
-        resolved_line = (line_id or settings.default_line_id).strip()
-        if not resolved_line:
-            raise HTTPException(status_code=400, detail="line_id is required")
-        return await builder.build(
+    cached, cache_status = await get_cached_dashboard(
+        module, scope_key, locale, lookback_days
+    )
+    if cached is not None and cache_status == CacheStatus.HIT:
+        response.headers["X-Dashboard-Cache"] = "hit"
+        return cached
+
+    if cached is not None and cache_status == CacheStatus.STALE:
+        response.headers["X-Dashboard-Cache"] = "stale"
+        _schedule_dashboard_revalidation(
+            module,
             line_id=resolved_line,
+            wh_code=resolved_wh,
             locale=locale,
             lookback_days=lookback_days,
             context=context,
         )
+        return cached
 
-    if module == "quality":
-        resolved_line = (line_id or settings.default_line_id or "").strip() or None
-        return await builder.build(
-            line_id=resolved_line,
-            locale=locale,
-            lookback_days=lookback_days,
-            context=context,
-        )
-
-    if module == "equipment":
-        resolved_line = (line_id or settings.default_line_id or "").strip() or None
-        return await builder.build(
-            line_id=resolved_line,
-            locale=locale,
-            lookback_days=lookback_days,
-            context=context,
-        )
-
-    resolved_wh = wh_code if wh_code is not None else settings.default_wh_code
-    if resolved_wh is not None:
-        resolved_wh = resolved_wh.strip() or None
-    return await builder.build(
+    response.headers["X-Dashboard-Cache"] = "miss"
+    return await _build_and_cache_dashboard(
+        module,
+        line_id=resolved_line,
         wh_code=resolved_wh,
+        scope_key=scope_key,
         locale=locale,
         lookback_days=lookback_days,
         context=context,

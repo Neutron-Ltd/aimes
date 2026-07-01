@@ -52,7 +52,7 @@ index.html
             ├── AppHeader.vue         # Title, clock, language toggle, fullscreen, back button
             └── <RouterView />
                 ├── Index.vue         # Home — five assistant entry cards
-                └── assistants/*/index.vue   # One dashboard per assistant
+                └── assistants/*/index.vue   # Thin wrapper → AssistantDashboardLayout
 ```
 
 ### Request / data flow (current)
@@ -109,22 +109,32 @@ Card data is built by `useLocale().homeAssistants`, which merges i18n text with 
 
 ### Assistant dashboard (shared layout)
 
-All five assistants use the **same layout template**; only the assistant key, chart builder, and theme accent differ.
+All five assistants use **`AssistantDashboardLayout.vue`** with the same structure; only the assistant key, chart builder, and theme accent differ.
+
+**Loading behavior**
+
+- Navigating from the home page opens the **page shell immediately** (header + layout).
+- The **AI chat console** on the right is interactive right away — it does not wait for dashboard data.
+- The **left report column** shows Element Plus skeletons (KPI cards, chart placeholders, insight) while `GET /api/v1/assistants/{module}/dashboard` runs in the background.
+- ECharts instances are **not mounted** until dashboard data arrives (avoids double-render on mock data).
+- On failure, an error banner with retry appears; chat remains usable. Dashboard fetch timeout: **60 seconds**.
 
 **Left column (~65% width on large screens) — Data report**
 
 - **KPI row** — Three metric cards (label, value, trend), e.g. plan attainment, utilization, WIP.
 - **Chart mosaic** — Six ECharts panels in a bento grid (`AssistantChartMosaic` + `chartMosaicLayout.js`).
-- **Insight card** — Auto-generated summary text from i18n templates (`insightTitle`, `insightText`).
+- **Insight card** — Summary from backend `insight` when live, else i18n template.
 
 **Right column (~35%) — AI chat console**
 
 - Greeting and quick-prompt buttons when no conversation yet.
-- Message thread with typing indicator during mock “thinking”.
+- Message thread; integrated assistants call `POST /api/v1/query` (independent of dashboard load).
 - Collapsible panel: user can hide the console and reopen it from a docked floating button (`Teleport` to `body`).
 - Enter key or Send button submits messages.
 
 Each assistant sets a CSS variable `--assistant-accent` for theme-colored charts, borders, and glow effects.
+
+**Backend cache:** Dashboard responses may be served from SQLite cache on the server (see [database.md](./database.md)); the frontend uses the same API contract regardless.
 
 ---
 
@@ -281,7 +291,9 @@ frontend/src/composables/
   useAssistantPage.js             # optional live KPI/chart refs
 ```
 
-**Graceful degradation:** If the dashboard API fails, mock KPIs/charts remain. Slots marked `source: fallback` on the backend also keep mock chart data on the frontend.
+**Graceful degradation:** If the dashboard API fails after loading completes, mock KPIs/charts are shown and an error banner offers retry. Chat is never blocked by dashboard load state.
+
+**Dashboard cache:** The backend may return cached snapshots (`X-Dashboard-Cache: hit|stale|miss`). Prewarm with `python scripts/refresh_dashboard_cache.py` on deploy.
 
 **Chat personas:** Integrated chat sends `assistant_module` (same key as the route, e.g. `procurement`) plus a domain prefix on the query string. The backend uses [`orchestrator/module_personas.py`](../orchestrator/module_personas.py) (aligned with `messages.js` greetings) for UNKNOWN-intent replies and module-specific synthesis/fallback report styles.
 

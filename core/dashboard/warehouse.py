@@ -44,49 +44,57 @@ async def _fetch_stock_summary(
     wh_code: Optional[str], ref_date: datetime
 ) -> dict[str, Any]:
     session = await get_session()
+    expiring_cutoff = ref_date + timedelta(days=30)
     try:
         filters = ["s.item_qty > 0"]
-        bind: dict[str, Any] = {"ref_date": ref_date}
+        bind: dict[str, Any] = {
+            "ref_date": ref_date,
+            "expiring_cutoff": expiring_cutoff,
+        }
         if wh_code:
             filters.append("s.wh_code = :wh_code")
             bind["wh_code"] = wh_code
 
         sql = text(
             f"""
-            SELECT s.item_code, s.item_qty, s.instock_time, s.invalid_date,
-                   COALESCE(ci.min_stock, 0) AS min_stock
+            SELECT COUNT(*) AS total,
+                   SUM(
+                       CASE
+                           WHEN COALESCE(ci.min_stock, 0) > 0
+                                AND s.item_qty < ci.min_stock
+                           THEN 1 ELSE 0
+                       END
+                   ) AS low_stock,
+                   SUM(
+                       CASE
+                           WHEN s.invalid_date IS NOT NULL
+                                AND s.invalid_date <= :expiring_cutoff
+                           THEN 1 ELSE 0
+                       END
+                   ) AS expiring,
+                   AVG(
+                       CASE
+                           WHEN s.instock_time IS NOT NULL
+                           THEN EXTRACT(
+                               EPOCH FROM (:ref_date - s.instock_time)
+                           ) / 86400.0
+                           ELSE NULL
+                       END
+                   ) AS avg_turnover_days
             FROM n2admin.t_wms_stock_info s
             LEFT JOIN n2admin.t_co_item ci ON s.item_code = ci.item_code
             WHERE {" AND ".join(filters)}
             """
         )
-        rows = [dict(r) for r in (await session.execute(sql, bind)).mappings().all()]
+        row = (await session.execute(sql, bind)).mappings().first()
     finally:
         await session.close()
 
-    total = len(rows)
-    low_stock = 0
-    expiring = 0
-    turnover_days: list[float] = []
-    expiring_cutoff = ref_date + timedelta(days=30)
-
-    for row in rows:
-        qty = float(row.get("item_qty") or 0)
-        min_stock = float(row.get("min_stock") or 0)
-        if min_stock > 0 and qty < min_stock:
-            low_stock += 1
-        invalid = row.get("invalid_date")
-        if invalid and invalid <= expiring_cutoff:
-            expiring += 1
-        instock = row.get("instock_time")
-        if instock:
-            delta = ref_date - instock
-            turnover_days.append(max(delta.total_seconds() / 86400.0, 0))
-
+    total = int(row.get("total") or 0) if row else 0
+    low_stock = int(row.get("low_stock") or 0) if row else 0
+    expiring = int(row.get("expiring") or 0) if row else 0
+    avg_turnover = row.get("avg_turnover_days") if row else None
     healthy = max(total - low_stock - expiring, 0)
-    avg_turnover = (
-        sum(turnover_days) / len(turnover_days) if turnover_days else None
-    )
     accuracy = ((healthy / total) * 100.0) if total else None
 
     return {
@@ -94,7 +102,7 @@ async def _fetch_stock_summary(
         "low_stock": low_stock,
         "expiring": expiring,
         "healthy": healthy,
-        "avg_turnover_days": avg_turnover,
+        "avg_turnover_days": float(avg_turnover) if avg_turnover is not None else None,
         "accuracy_pct": accuracy,
     }
 
@@ -112,32 +120,57 @@ async def _fetch_age_buckets(
 
         sql = text(
             f"""
-            SELECT s.instock_time
+            SELECT
+                SUM(
+                    CASE
+                        WHEN (DATE(:ref_date) - DATE(s.instock_time)) <= 30 THEN 1
+                        ELSE 0
+                    END
+                ) AS bucket_0,
+                SUM(
+                    CASE
+                        WHEN (DATE(:ref_date) - DATE(s.instock_time)) > 30
+                             AND (DATE(:ref_date) - DATE(s.instock_time)) <= 60
+                        THEN 1 ELSE 0
+                    END
+                ) AS bucket_1,
+                SUM(
+                    CASE
+                        WHEN (DATE(:ref_date) - DATE(s.instock_time)) > 60
+                             AND (DATE(:ref_date) - DATE(s.instock_time)) <= 90
+                        THEN 1 ELSE 0
+                    END
+                ) AS bucket_2,
+                SUM(
+                    CASE
+                        WHEN (DATE(:ref_date) - DATE(s.instock_time)) > 90
+                             AND (DATE(:ref_date) - DATE(s.instock_time)) <= 180
+                        THEN 1 ELSE 0
+                    END
+                ) AS bucket_3,
+                SUM(
+                    CASE
+                        WHEN (DATE(:ref_date) - DATE(s.instock_time)) > 180 THEN 1
+                        ELSE 0
+                    END
+                ) AS bucket_4
             FROM n2admin.t_wms_stock_info s
             WHERE {" AND ".join(filters)}
             """
         )
-        rows = (await session.execute(sql, bind)).mappings().all()
+        row = (await session.execute(sql, bind)).mappings().first()
     finally:
         await session.close()
 
-    buckets = [0, 0, 0, 0, 0]
-    for row in rows:
-        instock = row.get("instock_time")
-        if not instock:
-            continue
-        days = (ref_date - instock).days
-        if days <= 30:
-            buckets[0] += 1
-        elif days <= 60:
-            buckets[1] += 1
-        elif days <= 90:
-            buckets[2] += 1
-        elif days <= 180:
-            buckets[3] += 1
-        else:
-            buckets[4] += 1
-    return buckets
+    if not row:
+        return [0, 0, 0, 0, 0]
+    return [
+        int(row.get("bucket_0") or 0),
+        int(row.get("bucket_1") or 0),
+        int(row.get("bucket_2") or 0),
+        int(row.get("bucket_3") or 0),
+        int(row.get("bucket_4") or 0),
+    ]
 
 
 async def _fetch_bin_utilization(wh_code: Optional[str]) -> Optional[float]:
