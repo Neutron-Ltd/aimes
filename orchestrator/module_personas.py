@@ -269,19 +269,11 @@ def strip_domain_prefix(query: str) -> tuple[str, Optional[str]]:
 
 
 def get_module_greeting(locale: str, module: Optional[str] = None) -> str:
-    """Module-specific companion message for UNKNOWN intents (Markdown)."""
+    """Module-specific companion message for UNKNOWN intents (matches frontend greeting)."""
     persona = get_persona(module)
-    zh = locale == "zh-CN"
-
-    greeting = persona.greeting_zh if zh else persona.greeting_en
-    prompts = persona.sample_prompts_zh if zh else persona.sample_prompts_en
-    heading = "### 您可以这样问我：" if zh else "### Try asking me:"
-
-    lines = [greeting, "", "---", "", heading, ""]
-    for prompt in prompts:
-        lines.append(f"- *{prompt}*")
-    lines.append("")
-    return "\n".join(lines)
+    if locale == "zh-CN":
+        return persona.greeting_zh
+    return persona.greeting_en
 
 
 def get_analyst_context(locale: str, module: Optional[str] = None) -> tuple[str, str]:
