@@ -8,6 +8,7 @@ from typing import Any, Optional
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.line_scope import equipment_line_area_sn_subquery, reported_line_filter
 from mcp_tools.base import optional_session
 from models.intents.production import RootCauseParams
 
@@ -18,8 +19,10 @@ async def analyze_root_cause(
     session: Optional[AsyncSession] = None,
 ) -> list[dict[str, Any]]:
     async with optional_session(session) as db:
+        line_areas = equipment_line_area_sn_subquery()
+        line_predicate = reported_line_filter(alias="line")
         sql = text(
-            """
+            f"""
             SELECT wd.pro_lot, wd.operator, eq.device_sn,
                    date_trunc('hour', COALESCE(wd.in_time, wd.create_time)) AS bucket,
                    SUM(COALESCE(wd.pro_qty, 0) - COALESCE(wd.ng_qty, 0)
@@ -28,12 +31,9 @@ async def analyze_root_cause(
             JOIN n2admin.t_co_area ws ON wd.work_stationsn = ws.area_sn
             JOIN n2admin.t_co_area line ON ws.parent_sn = line.area_sn
             LEFT JOIN n2admin.t_smt_program_consumption_record eq
-              ON eq.device_sn IN (
-                  SELECT device_sn FROM n2admin.t_co_device
-                  WHERE cd_location = :line_id
-              )
+              ON eq.area_sn IN {line_areas}
              AND eq.create_time BETWEEN :start_date AND :end_date
-            WHERE line.area_sn = :line_id
+            WHERE {line_predicate}
               AND COALESCE(wd.in_time, wd.create_time) BETWEEN :start_date AND :end_date
             GROUP BY wd.pro_lot, wd.operator, eq.device_sn, bucket
             ORDER BY bucket

@@ -3,6 +3,9 @@
 Entity identifiers are passed through as extracted — no dummy defaults.
 Temporal defaults (e.g. today for date ranges) are applied only where noted.
 Required-entity checks run in orchestrator.param_validation before dispatch.
+
+Line identifiers may be canonical codes (FDQ-SMT-6) or Chinese names
+(防盗器贴片六线); SQL resolves them to area_sn at execution time.
 """
 
 from __future__ import annotations
@@ -83,11 +86,15 @@ def _line_id(intent: IntentSchema) -> str:
     return _first_present(intent.line_id)
 
 
+def _line_scope(intent: IntentSchema) -> Optional[str]:
+    return _strip(intent.line_id)
+
+
 def intent_to_aggregation_params(intent: IntentSchema) -> YieldAggregationParams:
     start, end = _date_range(intent)
     return YieldAggregationParams(
         yield_type=_resolve_yield_type(intent),
-        line_id=_strip(intent.line_id),
+        line_id=_line_scope(intent),
         device_sn=_strip(intent.device_sn),
         start_date=_start_of_day(start),
         end_date=_end_of_day(end),
@@ -100,7 +107,7 @@ def intent_to_anomalies_params(intent: IntentSchema) -> YieldAnomaliesParams:
     start, end = _date_range(intent)
     return YieldAnomaliesParams(
         yield_type=_resolve_yield_type(intent),
-        line_id=_strip(intent.line_id),
+        line_id=_line_scope(intent),
         device_sn=_strip(intent.device_sn),
         start_date=_start_of_day(start),
         end_date=_end_of_day(end),
@@ -117,7 +124,7 @@ def intent_to_comparison_params(intent: IntentSchema) -> CompareYieldPeriodsPara
     p2e = intent.period_2_end or today
     return CompareYieldPeriodsParams(
         yield_type=_resolve_yield_type(intent),
-        line_id=_strip(intent.line_id),
+        line_id=_line_scope(intent),
         device_sn=_strip(intent.device_sn),
         period_1_start=_start_of_day(p1s),
         period_1_end=_end_of_day(p1e),
@@ -140,7 +147,7 @@ def intent_to_device_rate_params(intent: IntentSchema) -> DeviceRateParams:
     start, end = _date_range(intent)
     return DeviceRateParams(
         device_sn=_strip(intent.device_sn),
-        line_id=_strip(intent.line_id),
+        line_id=_line_scope(intent),
         start_date=_start_of_day(start),
         end_date=_end_of_day(end),
     )

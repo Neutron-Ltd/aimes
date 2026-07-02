@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.intents.production import CapacityForecastParams
+from core.line_scope import equipment_scope_filter
 from mcp_tools.base import optional_session
 
 
@@ -21,15 +22,13 @@ async def forecast_capacity(
         end = datetime.now()
         start = end - timedelta(days=30)
         if params.line_id:
+            line_predicate = equipment_scope_filter(params.line_id, None, alias="eq")
             sql = text(
-                """
+                f"""
                 SELECT SUM(COALESCE(eq.finish_qty, 0)) AS total_qty,
                        COUNT(DISTINCT date_trunc('day', eq.create_time)) AS active_days
                 FROM n2admin.t_smt_program_consumption_record eq
-                WHERE eq.device_sn IN (
-                    SELECT device_sn FROM n2admin.t_co_device
-                    WHERE cd_location = :line_id
-                )
+                WHERE {line_predicate}
                   AND eq.create_time BETWEEN :start_date AND :end_date
                 """
             )

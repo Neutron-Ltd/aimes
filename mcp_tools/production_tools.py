@@ -6,8 +6,8 @@ period comparison. The LLM passes structured parameters only; SQL is
 predefined and table-routed — never LLM-generated.
 
 Table routing:
-  equipment → n2admin.t_smt_program_consumption_record via t_co_device.cd_location or device_sn
-  reported  → n2admin.t_wip_detail JOIN t_co_area (line.area_sn = line_id)
+  equipment → n2admin.t_smt_program_consumption_record via area_sn or device_sn
+  reported  → n2admin.t_wip_detail JOIN t_co_area (line.area_sn / area_name = line_id)
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.line_scope import equipment_scope_filter, reported_line_filter
 from core.logging import get_logger
 from core.math_safeguard import period_over_period_growth_rate, population_std_dev
 from mcp_tools.base import BaseMCPTool, optional_session
@@ -124,8 +125,8 @@ def build_yield_from_clause(yield_type: YieldType) -> str:
     """
     Route yield_type to the correct table(s).
 
-    equipment: consumption records — scoped by device_sn / t_co_device.cd_location
-               (area_sn on eq is often NULL in raw machine logs).
+    equipment: consumption records — scoped by device_sn or eq.area_sn
+               (Chinese line names resolved via t_co_area.area_name).
     reported:  join wip workstation records up to the parent line node
                in t_co_area — never filter t_wip_detail by line directly.
     """
@@ -139,19 +140,7 @@ def build_yield_from_clause(yield_type: YieldType) -> str:
 
 
 def _equipment_scope_filter(line_id: Optional[str], device_sn: Optional[str]) -> str:
-    """
-    Filter equipment consumption rows without using eq.area_sn (often NULL).
-
-    Prefer direct device_sn; otherwise resolve devices registered at cd_location = line_id.
-    """
-    if device_sn:
-        return "eq.device_sn = :device_sn"
-    if line_id:
-        return """eq.device_sn IN (
-            SELECT device_sn FROM n2admin.t_co_device
-            WHERE cd_location = :line_id
-        )"""
-    return "1=1"
+    return equipment_scope_filter(line_id, device_sn, alias="eq")
 
 
 def _line_filter(
@@ -162,7 +151,7 @@ def _line_filter(
     if yield_type == YieldType.EQUIPMENT:
         return _equipment_scope_filter(line_id, device_sn)
     if line_id:
-        return "line.area_sn = :line_id"
+        return reported_line_filter(alias="line")
     return "1=1"
 
 
@@ -561,8 +550,9 @@ class GetProductYieldTool(BaseMCPTool):
         from models.intents.production import ProductYieldParams, ProductYieldResult
 
         async with optional_session(session) as db:
+            line_predicate = reported_line_filter(alias="line")
             sql = text(
-                """
+                f"""
                 SELECT date_trunc('day', COALESCE(wd.in_time, wd.create_time)) AS bucket,
                        SUM(COALESCE(wd.pro_qty, 0) - COALESCE(wd.ng_qty, 0)
                            - COALESCE(wd.scrap_qty, 0)) AS good_qty,
@@ -571,7 +561,7 @@ class GetProductYieldTool(BaseMCPTool):
                 JOIN n2admin.t_co_area ws ON wd.work_stationsn = ws.area_sn
                 JOIN n2admin.t_co_area line ON ws.parent_sn = line.area_sn
                 JOIN n2admin.t_co_item ci ON wd.model_code = ci.item_code
-                WHERE line.area_sn = :line_id
+                WHERE {line_predicate}
                   AND wd.model_code = :product_code
                   AND COALESCE(wd.in_time, wd.create_time)
                       BETWEEN :start_date AND :end_date
@@ -628,12 +618,7 @@ class GetDeviceProductionRateTool(BaseMCPTool):
                 filters.append("eq.device_sn = :device_sn")
                 bind["device_sn"] = params.device_sn
             elif params.line_id:
-                filters.append(
-                    """eq.device_sn IN (
-                        SELECT device_sn FROM n2admin.t_co_device
-                        WHERE cd_location = :line_id
-                    )"""
-                )
+                filters.append(equipment_scope_filter(params.line_id, None, alias="eq"))
                 bind["line_id"] = params.line_id
 
             where = " AND ".join(filters)
@@ -678,8 +663,9 @@ class GetStandardTimeAchievementTool(BaseMCPTool):
         )
 
         async with optional_session(session) as db:
+            line_predicate = equipment_scope_filter(params.line_id, None, alias="eq")
             sql = text(
-                """
+                f"""
                 SELECT SUM(COALESCE(eq.finish_qty, 0)) AS actual_qty,
                        MAX(st.standard_time) AS standard_time,
                        EXTRACT(EPOCH FROM (MAX(eq.create_time) - MIN(eq.create_time))) / 3600.0
@@ -687,7 +673,7 @@ class GetStandardTimeAchievementTool(BaseMCPTool):
                 FROM n2admin.t_smt_program_consumption_record eq
                 JOIN n2admin.t_co_standard_time st
                   ON eq.area_sn = st.area_sn AND eq.model_code = st.model_code
-                WHERE eq.area_sn = :line_id
+                WHERE {line_predicate}
                   AND eq.model_code = :model_code
                   AND eq.create_time BETWEEN :start_date AND :end_date
                 """
