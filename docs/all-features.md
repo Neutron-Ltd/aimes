@@ -385,10 +385,3 @@ Procurement has **no dedicated MCP module**; dashboard uses WMS receive/supplier
 | `t_co_supplier` | | | | | ✅ |
 
 ---
-
-## Related docs / 相关文档
-
-- [frontend.md](./frontend.md) — SPA architecture, env vars, component map
-- [integration.md](./integration.md) — detailed integration report and file map
-- [mesai-vpd.md](./mesai-vpd.md) — visualization-to-database schema (VPD)
-- [database.md](./database.md) — dashboard cache and data latency
