@@ -4,7 +4,7 @@ import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from core.dashboard.production import production_dashboard_builder
 from core.dashboard.warehouse import warehouse_dashboard_builder
@@ -12,6 +12,7 @@ from core.dashboard.quality import quality_dashboard_builder
 from core.dashboard.equipment import equipment_dashboard_builder
 from core.dashboard.procurement import procurement_dashboard_builder
 from core.config import get_settings
+from core.db import check_db_connectivity
 from core.dashboard_cache.service import (
     CacheStatus,
     build_dashboard_response,
@@ -41,6 +42,8 @@ from models.schemas import (
 from orchestrator.router import route_and_execute
 
 router = APIRouter(prefix="/api/v1", tags=["orchestrator"])
+
+_REVALIDATION_TASKS: dict[str, asyncio.Task[None]] = {}
 
 DASHBOARD_BUILDERS = {
     "production": production_dashboard_builder,
@@ -100,6 +103,17 @@ async def _build_and_cache_dashboard(
     return response
 
 
+def _revalidation_key(
+    module: str,
+    line_id: Optional[str],
+    wh_code: Optional[str],
+    locale: str,
+    lookback_days: int,
+) -> str:
+    scope_key = build_scope_key(module, line_id=line_id, wh_code=wh_code)
+    return f"{module}:{scope_key}:{locale}:{lookback_days}"
+
+
 def _schedule_dashboard_revalidation(
     module: str,
     *,
@@ -109,6 +123,11 @@ def _schedule_dashboard_revalidation(
     lookback_days: int,
     context: MCPContext,
 ) -> None:
+    key = _revalidation_key(module, line_id, wh_code, locale, lookback_days)
+    existing = _REVALIDATION_TASKS.get(key)
+    if existing is not None and not existing.done():
+        return
+
     async def _revalidate() -> None:
         try:
             await refresh_dashboard_module(
@@ -125,16 +144,31 @@ def _schedule_dashboard_revalidation(
             get_logger(__name__).exception(
                 "Background dashboard revalidation failed for %s", module
             )
+        finally:
+            _REVALIDATION_TASKS.pop(key, None)
 
-    asyncio.create_task(_revalidate())
+    _REVALIDATION_TASKS[key] = asyncio.create_task(_revalidate())
 
 
 @router.get("/health", summary="Health check")
-async def health() -> dict[str, str]:
-    from core.config import get_settings
-
+async def health() -> JSONResponse | dict[str, str]:
     settings = get_settings()
-    return {"status": "ok", "service": "neutron-mes-ai", "version": settings.app_version}
+    body = {
+        "status": "ok",
+        "service": "neutron-mes-ai",
+        "version": settings.app_version,
+        "database": "ok",
+    }
+    if not await check_db_connectivity():
+        return JSONResponse(
+            status_code=503,
+            content={
+                **body,
+                "status": "degraded",
+                "database": "unavailable",
+            },
+        )
+    return body
 
 
 @router.get(

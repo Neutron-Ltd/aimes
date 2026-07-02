@@ -10,7 +10,9 @@ predefined, parameterized queries via sqlalchemy.text() only.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
@@ -19,6 +21,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import NullPool
 
 from core.config import get_settings
 from core.logging import get_logger
@@ -27,17 +30,36 @@ logger = get_logger(__name__)
 
 engine: AsyncEngine | None = None
 async_session_factory: async_sessionmaker[AsyncSession] | None = None
+_pg_work_sem: asyncio.Semaphore | None = None
+
+
+def _get_pg_work_sem() -> asyncio.Semaphore:
+    global _pg_work_sem
+    if _pg_work_sem is None:
+        settings = get_settings()
+        _pg_work_sem = asyncio.Semaphore(settings.db_pg_work_concurrency)
+    return _pg_work_sem
+
+
+@asynccontextmanager
+async def pg_work_slot() -> AsyncIterator[None]:
+    """Limit concurrent dashboard-style PG builds across scheduler and HTTP paths."""
+    async with _get_pg_work_sem():
+        yield
 
 
 def _build_engine() -> AsyncEngine:
     settings = get_settings()
-    return create_async_engine(
-        settings.database_url,
-        pool_pre_ping=True,
-        pool_size=settings.db_pool_size,
-        max_overflow=10,
-        echo=settings.debug,
-    )
+    engine_kwargs: dict = {
+        "pool_pre_ping": True,
+        "echo": settings.debug,
+    }
+    if settings.db_pool_size == 0:
+        engine_kwargs["poolclass"] = NullPool
+    else:
+        engine_kwargs["pool_size"] = settings.db_pool_size
+        engine_kwargs["max_overflow"] = settings.db_max_overflow
+    return create_async_engine(settings.database_url, **engine_kwargs)
 
 
 async def init_db() -> None:
@@ -54,7 +76,7 @@ async def init_db() -> None:
             "Invalid DATABASE_URL — check .env (port must be numeric, not a placeholder): %s",
             exc,
         )
-        return
+        raise
 
     async_session_factory = async_sessionmaker(
         engine,
@@ -65,12 +87,13 @@ async def init_db() -> None:
     try:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
-        logger.info("Database connection pool initialized")
     except Exception:
-        logger.exception(
-            "Database connectivity check failed — MCP tools may error until "
-            "DATABASE_URL is reachable"
-        )
+        logger.exception("Database connectivity check failed")
+        await close_db()
+        raise
+
+    pool_mode = "NullPool" if get_settings().db_pool_size == 0 else "QueuePool"
+    logger.info("Database connection pool initialized (%s)", pool_mode)
 
 
 async def close_db() -> None:
@@ -83,6 +106,18 @@ async def close_db() -> None:
 
     engine = None
     async_session_factory = None
+
+
+async def check_db_connectivity() -> bool:
+    """Return True if PostgreSQL responds to SELECT 1."""
+    if engine is None:
+        return False
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        return True
+    except Exception:
+        return False
 
 
 async def get_db() -> AsyncIterator[AsyncSession]:

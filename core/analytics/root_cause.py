@@ -3,17 +3,21 @@
 from __future__ import annotations
 
 from collections import Counter
-from typing import Any
+from typing import Any, Optional
 
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.db import get_session
+from mcp_tools.base import optional_session
 from models.intents.production import RootCauseParams
 
 
-async def analyze_root_cause(params: RootCauseParams) -> list[dict[str, Any]]:
-    session = await get_session()
-    try:
+async def analyze_root_cause(
+    params: RootCauseParams,
+    *,
+    session: Optional[AsyncSession] = None,
+) -> list[dict[str, Any]]:
+    async with optional_session(session) as db:
         sql = text(
             """
             SELECT wd.pro_lot, wd.operator, eq.device_sn,
@@ -35,7 +39,7 @@ async def analyze_root_cause(params: RootCauseParams) -> list[dict[str, Any]]:
             ORDER BY bucket
             """
         )
-        result = await session.execute(
+        result = await db.execute(
             sql,
             {
                 "line_id": params.line_id,
@@ -44,8 +48,6 @@ async def analyze_root_cause(params: RootCauseParams) -> list[dict[str, Any]]:
             },
         )
         rows = [dict(r) for r in result.mappings().all()]
-    finally:
-        await session.close()
 
     if not rows:
         return [{"cause": "insufficient_data", "score": 0.0}]

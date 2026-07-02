@@ -2,20 +2,25 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.db import get_session
 from core.logging import get_logger
+from mcp_tools.base import optional_session
 from models.intents.production import SchedulingParams
 
 logger = get_logger(__name__)
 
 
-async def optimize_schedule(params: SchedulingParams) -> list[dict[str, Any]]:
-    session = await get_session()
-    try:
+async def optimize_schedule(
+    params: SchedulingParams,
+    *,
+    session: Optional[AsyncSession] = None,
+) -> list[dict[str, Any]]:
+    orders: list[dict[str, Any]] = []
+    async with optional_session(session) as db:
         sql = text(
             """
             SELECT mo.mo_number, mo.plan_qty, mo.plan_start_time, mo.plan_end_time
@@ -26,7 +31,7 @@ async def optimize_schedule(params: SchedulingParams) -> list[dict[str, Any]]:
             """
         )
         try:
-            result = await session.execute(sql)
+            result = await db.execute(sql)
             orders = [dict(r) for r in result.mappings().all()]
         except Exception:
             logger.exception(
@@ -34,8 +39,6 @@ async def optimize_schedule(params: SchedulingParams) -> list[dict[str, Any]]:
                 params.line_id,
             )
             orders = []
-    finally:
-        await session.close()
 
     if not orders:
         return []

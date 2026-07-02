@@ -6,6 +6,10 @@ Pipeline: parse_intent → RAG enrichment → MCP dispatch → synthesis report.
 Chat queries (POST /api/v1/query) always execute live MCP tools against
 PostgreSQL. They must never read from the SQLite dashboard cache in
 core/dashboard_cache/.
+
+CONNECTION INVARIANT: No AsyncSession may remain open across any Bailian /
+DashScope call. Phase 1 (_fetch_*) runs all SQL and materializes in-memory
+dicts; Phase 2 (_synthesize_message) calls external LLM APIs only.
 """
 
 from __future__ import annotations
@@ -47,6 +51,30 @@ def _resolve_assistant_module(
     return cleaned, module, query
 
 
+async def _fetch_tool_result(
+    tool,
+    params,
+    context: MCPContext,
+) -> MCPToolResult:
+    """
+    Phase 1 — execute MCP tool, materialize rows into dicts, close PG session.
+
+    Must complete (and release all DB connections) before any LLM call.
+    """
+    return await tool.run(params, context)
+
+
+async def _fetch_cross_module_result(
+    params: CrossModuleParams,
+    context: MCPContext,
+) -> dict[str, Any]:
+    """
+    Phase 1 — run cross-module MCP tools sequentially, return materialized dict.
+    """
+    cross_result = await run_cross_module_analysis(params, context)
+    return cross_result.model_dump(mode="json")
+
+
 async def _synthesize_message(
     query: str,
     db_result: dict[str, Any],
@@ -54,7 +82,9 @@ async def _synthesize_message(
     locale: str = "zh-CN",
     module: Optional[str] = None,
 ) -> str:
-    """Run second-pass LLM synthesis with formatted fallback on any failure."""
+    """
+    Phase 2 — second-pass LLM synthesis. No database access permitted here.
+    """
     try:
         return await generate_ai_analysis(
             query, db_result, rag_context, locale, module=module
@@ -80,9 +110,10 @@ async def _run_tool(
     locale: str = "zh-CN",
     module: Optional[str] = None,
 ) -> OrchestratorResponse:
-    tool_result: MCPToolResult = await tool.run(params, context)
     meta = metadata or {}
     rag_context = meta.get("rag_context")
+
+    tool_result = await _fetch_tool_result(tool, params, context)
 
     if not tool_result.success:
         return OrchestratorResponse(
@@ -93,6 +124,7 @@ async def _run_tool(
             metadata=meta,
         )
 
+    # Phase 2 — no open AsyncSession below this line
     report = await _synthesize_message(
         query,
         tool_result.data,
@@ -146,8 +178,8 @@ async def route_and_execute(
                 metadata=metadata,
             )
         params = CrossModuleParams(line_id=intent.line_id.strip(), raw_query=cleaned_query)
-        cross_result = await run_cross_module_analysis(params, context)
-        result_dict = cross_result.model_dump(mode="json")
+        result_dict = await _fetch_cross_module_result(params, context)
+        # Phase 2 — no open AsyncSession below this line
         report = await _synthesize_message(
             cleaned_query,
             result_dict,

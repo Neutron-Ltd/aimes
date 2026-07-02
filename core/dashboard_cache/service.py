@@ -14,7 +14,7 @@ from core.dashboard.production import production_dashboard_builder
 from core.dashboard.quality import quality_dashboard_builder
 from core.dashboard.warehouse import warehouse_dashboard_builder
 from core.dashboard_cache import store
-from core.db import get_session
+from core.db import get_session, pg_work_slot
 from core.logging import get_logger
 from models.dashboard import AssistantDashboardResponse
 from models.schemas import MCPContext
@@ -123,33 +123,34 @@ async def build_dashboard_response(
     context: MCPContext,
 ) -> AssistantDashboardResponse:
     builder = BUILDERS[module]
-    session = await get_session()
-    try:
-        if module == "production":
+    async with pg_work_slot():
+        session = await get_session()
+        try:
+            if module == "production":
+                return await builder.build(
+                    line_id=line_id,
+                    locale=locale,
+                    lookback_days=lookback_days,
+                    context=context,
+                    session=session,
+                )
+            if module in ("quality", "equipment"):
+                return await builder.build(
+                    line_id=line_id,
+                    locale=locale,
+                    lookback_days=lookback_days,
+                    context=context,
+                    session=session,
+                )
             return await builder.build(
-                line_id=line_id,
+                wh_code=wh_code,
                 locale=locale,
                 lookback_days=lookback_days,
                 context=context,
                 session=session,
             )
-        if module in ("quality", "equipment"):
-            return await builder.build(
-                line_id=line_id,
-                locale=locale,
-                lookback_days=lookback_days,
-                context=context,
-                session=session,
-            )
-        return await builder.build(
-            wh_code=wh_code,
-            locale=locale,
-            lookback_days=lookback_days,
-            context=context,
-            session=session,
-        )
-    finally:
-        await session.close()
+        finally:
+            await session.close()
 
 
 async def refresh_dashboard_module(

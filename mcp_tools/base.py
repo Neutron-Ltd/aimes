@@ -28,15 +28,28 @@ TResult = TypeVar("TResult", bound=BaseModel)
 async def optional_session(
     session: AsyncSession | None = None,
 ) -> AsyncIterator[AsyncSession]:
-    """Yield an existing session or acquire and close a standalone one."""
+    """
+    Yield an existing session or acquire and close a standalone one.
+
+    When this context manager owns the session, ``close()`` runs in ``finally``
+    on success, Exception, and asyncio.CancelledError.
+    """
     if session is not None:
         yield session
         return
+
     owned = await get_session()
     try:
         yield owned
     finally:
         await owned.close()
+
+
+@asynccontextmanager
+async def owned_session() -> AsyncIterator[AsyncSession]:
+    """Acquire a standalone session that is always closed on exit."""
+    async with optional_session(None) as db:
+        yield db
 
 
 class MCPToolResult(BaseModel):

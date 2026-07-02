@@ -30,7 +30,7 @@ class GetProductionRootCauseTool(BaseMCPTool[RootCauseParams, RootCauseResult]):
         *,
         session: AsyncSession | None = None,
     ) -> RootCauseResult:
-        causes = await analyze_root_cause(params)
+        causes = await analyze_root_cause(params, session=session)
         return RootCauseResult(
             line_id=params.line_id,
             probable_causes=causes,
@@ -48,7 +48,7 @@ class OptimizeProductionScheduleTool(BaseMCPTool[SchedulingParams, SchedulingRes
         *,
         session: AsyncSession | None = None,
     ) -> SchedulingResult:
-        schedule = await optimize_schedule(params)
+        schedule = await optimize_schedule(params, session=session)
         return SchedulingResult(
             line_id=params.line_id,
             adjusted_schedule=schedule,

@@ -29,7 +29,13 @@ class Settings(BaseSettings):
         ),
         validation_alias="DATABASE_URL",
     )
-    db_pool_size: int = 3
+    db_pool_size: int = 0
+    db_max_overflow: int = 0
+    db_pg_work_concurrency: int = Field(
+        default=1,
+        validation_alias="DB_PG_WORK_CONCURRENCY",
+        description="Max concurrent dashboard PG builds (scheduler + HTTP)",
+    )
     default_workshop_id: str = "WS-001"
     default_wh_code: Optional[str] = Field(
         default=None, validation_alias="DEFAULT_WH_CODE"
@@ -80,6 +86,11 @@ class Settings(BaseSettings):
     dashboard_cache_refresh_interval_seconds: int = Field(
         default=3600,
         validation_alias="DASHBOARD_CACHE_REFRESH_INTERVAL_SECONDS",
+    )
+    dashboard_cache_refresh_on_startup: bool = Field(
+        default=False,
+        validation_alias="DASHBOARD_CACHE_REFRESH_ON_STARTUP",
+        description="Run an immediate cache refresh when the scheduler starts",
     )
 
 
