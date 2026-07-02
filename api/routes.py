@@ -150,8 +150,8 @@ def _schedule_dashboard_revalidation(
     _REVALIDATION_TASKS[key] = asyncio.create_task(_revalidate())
 
 
-@router.get("/health", summary="Health check")
-async def health() -> JSONResponse | dict[str, str]:
+@router.get("/health", summary="Health check", response_model=None)
+async def health():
     settings = get_settings()
     body = {
         "status": "ok",
