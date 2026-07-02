@@ -11,6 +11,7 @@ from core.dashboard.warehouse import warehouse_dashboard_builder
 from core.dashboard.quality import quality_dashboard_builder
 from core.dashboard.equipment import equipment_dashboard_builder
 from core.dashboard.procurement import procurement_dashboard_builder
+from core.bailian import bailian_config_status
 from core.config import get_settings
 from core.db import check_db_connectivity
 from core.dashboard_cache.service import (
@@ -158,6 +159,7 @@ async def health():
         "service": "neutron-mes-ai",
         "version": settings.app_version,
         "database": "ok",
+        "bailian": bailian_config_status(settings),
     }
     if not await check_db_connectivity():
         return JSONResponse(
@@ -168,6 +170,8 @@ async def health():
                 "database": "unavailable",
             },
         )
+    if body["bailian"] != "ok":
+        body["status"] = "degraded"
     return body
 
 

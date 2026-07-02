@@ -26,7 +26,12 @@ from orchestrator.intent_utils import RAG_INTENTS, parse_intent
 from orchestrator.module_personas import resolve_module, strip_domain_prefix
 from orchestrator.param_mappers import PARAM_MAPPERS
 from orchestrator.param_validation import validate_intent_params
-from orchestrator.report_generator import _fallback_markdown_report, generate_ai_analysis, get_companion_greeting
+from orchestrator.report_generator import (
+    _fallback_markdown_report,
+    generate_ai_analysis,
+    get_companion_greeting,
+    get_intent_failure_message,
+)
 from orchestrator.tool_registry import get_tool_for_intent, register_all_tools
 
 logger = get_logger(__name__)
@@ -203,6 +208,14 @@ async def route_and_execute(
                 result={"export_format": intent.export_format or "xlsx", "hint": "POST /api/v1/export"},
                 message="Use POST /api/v1/export with the orchestrator result payload.",
                 metadata=metadata,
+            )
+        if intent.parse_error:
+            return OrchestratorResponse(
+                intent=intent,
+                tool_name=None,
+                result=None,
+                message=get_intent_failure_message(locale, intent.parse_error),
+                metadata={**metadata, "intent_parse_error": intent.parse_error},
             )
         return OrchestratorResponse(
             intent=intent,

@@ -85,6 +85,10 @@ class IntentSchema(BaseModel):
     item_code: Optional[str] = None
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     raw_query: str = ""
+    parse_error: Optional[str] = Field(
+        default=None,
+        description="Set when intent extraction failed before LLM classification",
+    )
 
 
 class BailianIntentExtraction(BaseModel):

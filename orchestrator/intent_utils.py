@@ -12,6 +12,7 @@ from typing import Any, Optional
 import dashscope
 from pydantic import ValidationError
 
+from core.bailian import bailian_credentials_configured
 from core.config import get_settings
 from core.logging import get_logger
 from models.schemas import BailianIntentExtraction, IntentSchema, IntentType, MCPContext
@@ -36,7 +37,12 @@ RAG_INTENTS = {
 
 def fallback_intent(query: str, reason: str) -> IntentSchema:
     logger.warning("Intent extraction failed: %s", reason)
-    return IntentSchema(intent=IntentType.UNKNOWN, raw_query=query, confidence=0.0)
+    return IntentSchema(
+        intent=IntentType.UNKNOWN,
+        raw_query=query,
+        confidence=0.0,
+        parse_error=reason,
+    )
 
 
 def strip_markdown_json(text: str) -> str:
@@ -126,7 +132,7 @@ async def parse_intent(
     normalized = query.strip()
     settings = get_settings()
 
-    if not settings.dashscope_api_key or not settings.bailian_app_id:
+    if not bailian_credentials_configured(settings):
         return fallback_intent(
             normalized,
             "DASHSCOPE_API_KEY or BAILIAN_APP_ID not configured",

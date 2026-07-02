@@ -28,6 +28,21 @@ def get_companion_greeting(locale: str = "zh-CN", module: Optional[str] = None) 
     return get_module_greeting(locale, module)
 
 
+def get_intent_failure_message(locale: str, reason: str) -> str:
+    """User-visible message when Bailian intent extraction fails."""
+    if locale == "zh-CN":
+        return (
+            f"意图识别服务不可用：{reason}。"
+            "请检查服务器 .env 中的 DASHSCOPE_API_KEY 与 BAILIAN_APP_ID，"
+            "并确认容器可访问 DashScope 网络。"
+        )
+    return (
+        f"Intent routing is unavailable: {reason}. "
+        "Check DASHSCOPE_API_KEY and BAILIAN_APP_ID in the server .env, "
+        "and ensure the container can reach DashScope."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Human-readable field mapping for fallback reports
 # ---------------------------------------------------------------------------
