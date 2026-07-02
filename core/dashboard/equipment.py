@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime
 from typing import Any, Optional
 
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import get_settings
 from core.dashboard.base import (
@@ -19,7 +19,6 @@ from core.dashboard.base import (
     resolve_date_range,
     tool_data,
 )
-from core.db import get_session
 from models.dashboard import (
     AssistantDashboardResponse,
     DashboardChartSlot,
@@ -52,28 +51,25 @@ def _line_filter(line_id: Optional[str]) -> tuple[str, dict[str, Any]]:
 
 
 async def _fetch_device_registry_summary(
+    session: AsyncSession,
     line_id: Optional[str],
 ) -> dict[str, Any]:
     settings = get_settings()
     ref_date = settings.dashboard_reference_date
-    session = await get_session()
-    try:
-        line_sql, line_bind = _line_filter(line_id)
-        sql = text(
-            f"""
-            SELECT COUNT(*) AS total,
-                   COUNT(*) FILTER (
-                       WHERE expire_date IS NULL OR expire_date >= :ref_date
-                   ) AS valid
-            FROM n2admin.t_co_device
-            WHERE 1=1
-            {line_sql}
-            """
-        )
-        bind = {"ref_date": ref_date, **line_bind}
-        row = (await session.execute(sql, bind)).mappings().first()
-    finally:
-        await session.close()
+    line_sql, line_bind = _line_filter(line_id)
+    sql = text(
+        f"""
+        SELECT COUNT(*) AS total,
+               COUNT(*) FILTER (
+                   WHERE expire_date IS NULL OR expire_date >= :ref_date
+               ) AS valid
+        FROM n2admin.t_co_device
+        WHERE 1=1
+        {line_sql}
+        """
+    )
+    bind = {"ref_date": ref_date, **line_bind}
+    row = (await session.execute(sql, bind)).mappings().first()
 
     total = int(row.get("total") or 0) if row else 0
     valid = int(row.get("valid") or 0) if row else 0
@@ -86,34 +82,33 @@ async def _fetch_device_registry_summary(
 
 
 async def _fetch_active_device_ratio(
-    line_id: Optional[str], start: datetime, end: datetime
+    session: AsyncSession,
+    line_id: Optional[str],
+    start: datetime,
+    end: datetime,
 ) -> dict[str, Any]:
-    session = await get_session()
-    try:
-        line_sql, line_bind = _line_filter(line_id)
-        sql = text(
-            f"""
-            WITH registered AS (
-                SELECT device_sn
-                FROM n2admin.t_co_device
-                WHERE 1=1
-                {line_sql}
-            ),
-            active AS (
-                SELECT DISTINCT eq.device_sn
-                FROM n2admin.t_smt_program_consumption_record eq
-                WHERE eq.create_time BETWEEN :start_date AND :end_date
-                  AND eq.device_sn IN (SELECT device_sn FROM registered)
-            )
-            SELECT
-                (SELECT COUNT(*) FROM registered) AS total,
-                (SELECT COUNT(*) FROM active) AS active
-            """
+    line_sql, line_bind = _line_filter(line_id)
+    sql = text(
+        f"""
+        WITH registered AS (
+            SELECT device_sn
+            FROM n2admin.t_co_device
+            WHERE 1=1
+            {line_sql}
+        ),
+        active AS (
+            SELECT DISTINCT eq.device_sn
+            FROM n2admin.t_smt_program_consumption_record eq
+            WHERE eq.create_time BETWEEN :start_date AND :end_date
+              AND eq.device_sn IN (SELECT device_sn FROM registered)
         )
-        bind = {"start_date": start, "end_date": end, **line_bind}
-        row = (await session.execute(sql, bind)).mappings().first()
-    finally:
-        await session.close()
+        SELECT
+            (SELECT COUNT(*) FROM registered) AS total,
+            (SELECT COUNT(*) FROM active) AS active
+        """
+    )
+    bind = {"start_date": start, "end_date": end, **line_bind}
+    row = (await session.execute(sql, bind)).mappings().first()
 
     total = int(row.get("total") or 0) if row else 0
     active = int(row.get("active") or 0) if row else 0
@@ -132,73 +127,70 @@ class EquipmentDashboardBuilder:
         locale: str,
         lookback_days: int,
         context: MCPContext,
+        *,
+        session: AsyncSession,
     ) -> AssistantDashboardResponse:
         start, end = resolve_date_range(lookback_days)
         prev_start, prev_end = previous_period(start, end)
 
-        (
-            achievement_total,
-            achievement_daily,
-            achievement_prev,
-            device_rates,
-            anomalies,
-            registry_summary,
-            active_ratio,
-        ) = await asyncio.gather(
-            get_yield_aggregation_tool.run(
-                YieldAggregationParams(
-                    yield_type=YieldType.EQUIPMENT,
-                    line_id=line_id,
-                    start_date=start,
-                    end_date=end,
-                    group_by=GroupBy.TOTAL,
-                    metric=Metric.ACHIEVEMENT_RATE,
-                ),
-                context,
+        achievement_total = await get_yield_aggregation_tool.run(
+            YieldAggregationParams(
+                yield_type=YieldType.EQUIPMENT,
+                line_id=line_id,
+                start_date=start,
+                end_date=end,
+                group_by=GroupBy.TOTAL,
+                metric=Metric.ACHIEVEMENT_RATE,
             ),
-            get_yield_aggregation_tool.run(
-                YieldAggregationParams(
-                    yield_type=YieldType.EQUIPMENT,
-                    line_id=line_id,
-                    start_date=start,
-                    end_date=end,
-                    group_by=GroupBy.DAILY,
-                    metric=Metric.ACHIEVEMENT_RATE,
-                ),
-                context,
-            ),
-            compare_yield_periods_tool.run(
-                CompareYieldPeriodsParams(
-                    yield_type=YieldType.EQUIPMENT,
-                    line_id=line_id,
-                    period_1_start=prev_start,
-                    period_1_end=prev_end,
-                    period_2_start=start,
-                    period_2_end=end,
-                ),
-                context,
-            ),
-            get_device_production_rate_tool.run(
-                DeviceRateParams(
-                    line_id=line_id,
-                    start_date=start,
-                    end_date=end,
-                ),
-                context,
-            ),
-            get_yield_anomalies_tool.run(
-                YieldAnomaliesParams(
-                    yield_type=YieldType.EQUIPMENT,
-                    line_id=line_id,
-                    start_date=start,
-                    end_date=end,
-                    analysis_type=AnalysisType.BELOW_STANDARD,
-                ),
-                context,
-            ),
-            _fetch_device_registry_summary(line_id),
-            _fetch_active_device_ratio(line_id, start, end),
+            context,
+            session=session,
         )
+        achievement_daily = await get_yield_aggregation_tool.run(
+            YieldAggregationParams(
+                yield_type=YieldType.EQUIPMENT,
+                line_id=line_id,
+                start_date=start,
+                end_date=end,
+                group_by=GroupBy.DAILY,
+                metric=Metric.ACHIEVEMENT_RATE,
+            ),
+            context,
+            session=session,
+        )
+        achievement_prev = await compare_yield_periods_tool.run(
+            CompareYieldPeriodsParams(
+                yield_type=YieldType.EQUIPMENT,
+                line_id=line_id,
+                period_1_start=prev_start,
+                period_1_end=prev_end,
+                period_2_start=start,
+                period_2_end=end,
+            ),
+            context,
+            session=session,
+        )
+        device_rates = await get_device_production_rate_tool.run(
+            DeviceRateParams(
+                line_id=line_id,
+                start_date=start,
+                end_date=end,
+            ),
+            context,
+            session=session,
+        )
+        anomalies = await get_yield_anomalies_tool.run(
+            YieldAnomaliesParams(
+                yield_type=YieldType.EQUIPMENT,
+                line_id=line_id,
+                start_date=start,
+                end_date=end,
+                analysis_type=AnalysisType.BELOW_STANDARD,
+            ),
+            context,
+            session=session,
+        )
+        registry_summary = await _fetch_device_registry_summary(session, line_id)
+        active_ratio = await _fetch_active_device_ratio(session, line_id, start, end)
 
         kpis = self._build_kpis(achievement_total, achievement_prev, anomalies)
         charts = self._build_charts(
@@ -323,7 +315,6 @@ class EquipmentDashboardBuilder:
         if devices:
             rates = [float(d.get("avg_rate") or 0) for d in devices]
             max_rate = max(rates) if rates else 0.0
-            top = devices[:5]
             if max_rate > 0:
                 charts.append(
                     DashboardChartSlot(
@@ -331,7 +322,7 @@ class EquipmentDashboardBuilder:
                         chart_type="bar",
                         x_data=[
                             str(d.get("device_name") or d.get("device_sn") or "")[:12]
-                            for d in top
+                            for d in devices
                         ],
                         series=[
                             round(
@@ -340,7 +331,7 @@ class EquipmentDashboardBuilder:
                                 * DOWNTIME_PROXY_SCALE,
                                 1,
                             )
-                            for d in top
+                            for d in devices
                         ],
                         source=DataSource.LIVE,
                     )

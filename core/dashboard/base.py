@@ -19,10 +19,11 @@ from mcp_tools.base import MCPToolResult
 class DashboardBuilder(Protocol):
     async def build(
         self,
-        line_id: str,
+        *,
         locale: str,
         lookback_days: int,
         context: MCPContext,
+        session: Any,
     ) -> AssistantDashboardResponse:
         ...
 

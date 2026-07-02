@@ -6,10 +6,10 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.db import get_session
 from core.math_safeguard import period_over_period_growth_rate
-from mcp_tools.base import BaseMCPTool
+from mcp_tools.base import BaseMCPTool, optional_session
 from models.intents.quality import (
     DefectAggregationParams,
     DefectAggregationResult,
@@ -30,10 +30,13 @@ class GetQualityDefectAggregationTool(
     description = "Defect rate aggregation from t_qm_inspect_info."
 
     async def execute(
-        self, params: DefectAggregationParams, context: MCPContext
+        self,
+        params: DefectAggregationParams,
+        context: MCPContext,
+        *,
+        session: AsyncSession | None = None,
     ) -> DefectAggregationResult:
-        session = await get_session()
-        try:
+        async with optional_session(session) as db:
             filters = ["qi.test_start_time BETWEEN :start_date AND :end_date"]
             bind: dict[str, Any] = {
                 "start_date": params.start_date,
@@ -53,10 +56,8 @@ class GetQualityDefectAggregationTool(
                 GROUP BY qi.test_step
                 """
             )
-            result = await session.execute(sql, bind)
+            result = await db.execute(sql, bind)
             rows = [dict(r) for r in result.mappings().all()]
-        finally:
-            await session.close()
 
         total_inspected = sum(int(r.get("inspected") or 0) for r in rows)
         total_defects = sum(int(r.get("defects") or 0) for r in rows)
@@ -87,10 +88,13 @@ class AnalyzeDefectRootCauseTool(
     description = "Ranked root cause hypotheses from QM problem tables."
 
     async def execute(
-        self, params: QualityRootCauseParams, context: MCPContext
+        self,
+        params: QualityRootCauseParams,
+        context: MCPContext,
+        *,
+        session: AsyncSession | None = None,
     ) -> QualityRootCauseResult:
-        session = await get_session()
-        try:
+        async with optional_session(session) as db:
             sql = text(
                 """
                 SELECT pr.problem_desc, prr.cause_desc, COUNT(*) AS cnt
@@ -102,7 +106,7 @@ class AnalyzeDefectRootCauseTool(
                 LIMIT 10
                 """
             )
-            result = await session.execute(
+            result = await db.execute(
                 sql,
                 {
                     "start_date": params.start_date,
@@ -110,8 +114,6 @@ class AnalyzeDefectRootCauseTool(
                 },
             )
             rows = result.mappings().all()
-        finally:
-            await session.close()
 
         hypotheses = [
             {
@@ -129,10 +131,13 @@ class CheckErrorPreventionTool(BaseMCPTool[ErrorPreventionParams, ErrorPreventio
     description = "Validate IPQC checklist vs inspection scheme."
 
     async def execute(
-        self, params: ErrorPreventionParams, context: MCPContext
+        self,
+        params: ErrorPreventionParams,
+        context: MCPContext,
+        *,
+        session: AsyncSession | None = None,
     ) -> ErrorPreventionResult:
-        session = await get_session()
-        try:
+        async with optional_session(session) as db:
             scheme_sql = text(
                 """
                 SELECT scheme_name, inspect_item
@@ -150,10 +155,8 @@ class CheckErrorPreventionTool(BaseMCPTool[ErrorPreventionParams, ErrorPreventio
                 """
             )
             bind = {"process_code": params.process_code}
-            scheme_rows = (await session.execute(scheme_sql, bind)).mappings().all()
-            doc_rows = (await session.execute(doc_sql, bind)).mappings().all()
-        finally:
-            await session.close()
+            scheme_rows = (await db.execute(scheme_sql, bind)).mappings().all()
+            doc_rows = (await db.execute(doc_sql, bind)).mappings().all()
 
         scheme_items = {r.get("inspect_item") for r in scheme_rows if r.get("inspect_item")}
         doc_items = {r.get("inspect_item") for r in doc_rows if r.get("inspect_item")}
@@ -174,36 +177,37 @@ class VerifyQualityEffectivenessTool(
     description = "Before/after defect rate comparison around a milestone."
 
     async def execute(
-        self, params: EffectivenessVerifyParams, context: MCPContext
+        self,
+        params: EffectivenessVerifyParams,
+        context: MCPContext,
+        *,
+        session: AsyncSession | None = None,
     ) -> EffectivenessVerifyResult:
-        session = await get_session()
         milestone = params.milestone_date
         before_start = milestone - timedelta(days=params.comparison_days)
         after_end = milestone + timedelta(days=params.comparison_days)
 
-        async def _rate(start: datetime, end: datetime) -> float:
-            sql = text(
-                """
-                SELECT SUM(COALESCE(real_qty, 0)) AS inspected,
-                       SUM(COALESCE(error_qty, 0)) AS defects
-                FROM n2admin.t_qm_inspect_info
-                WHERE test_start_time BETWEEN :start_date AND :end_date
-                """
-            )
-            result = await session.execute(
-                sql,
-                {"start_date": start, "end_date": end},
-            )
-            row = result.mappings().first() or {}
-            inspected = float(row.get("inspected") or 0)
-            defects = float(row.get("defects") or 0)
-            return (defects / inspected * 100.0) if inspected else 0.0
+        async with optional_session(session) as db:
+            async def _rate(start: datetime, end: datetime) -> float:
+                sql = text(
+                    """
+                    SELECT SUM(COALESCE(real_qty, 0)) AS inspected,
+                           SUM(COALESCE(error_qty, 0)) AS defects
+                    FROM n2admin.t_qm_inspect_info
+                    WHERE test_start_time BETWEEN :start_date AND :end_date
+                    """
+                )
+                result = await db.execute(
+                    sql,
+                    {"start_date": start, "end_date": end},
+                )
+                row = result.mappings().first() or {}
+                inspected = float(row.get("inspected") or 0)
+                defects = float(row.get("defects") or 0)
+                return (defects / inspected * 100.0) if inspected else 0.0
 
-        try:
             before_rate = await _rate(before_start, milestone)
             after_rate = await _rate(milestone, after_end)
-        finally:
-            await session.close()
 
         growth = period_over_period_growth_rate(after_rate, before_rate)
         return EffectivenessVerifyResult(

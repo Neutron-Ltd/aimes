@@ -1,4 +1,4 @@
-import { apiFetch, ApiError, DEFAULT_LINE_ID, DEFAULT_WH_CODE } from './client'
+import { apiFetch, ApiError, DEFAULT_WH_CODE } from './client'
 import { toApiLocale } from './locale'
 
 const DASHBOARD_TIMEOUT_MS = 60_000
@@ -41,7 +41,7 @@ const DASHBOARD_TIMEOUT_MS = 60_000
 export async function getAssistantDashboard(
   module,
   {
-    lineId = DEFAULT_LINE_ID,
+    lineId,
     whCode = DEFAULT_WH_CODE,
     locale = 'zh',
     lookbackDays = 7
@@ -52,7 +52,10 @@ export async function getAssistantDashboard(
     lookback_days: String(lookbackDays)
   })
 
-  if (module === 'production' || module === 'quality' || module === 'equipment') {
+  if (
+    (module === 'production' || module === 'quality' || module === 'equipment') &&
+    lineId
+  ) {
     params.set('line_id', lineId)
   } else if ((module === 'warehouse' || module === 'procurement') && whCode) {
     params.set('wh_code', whCode)

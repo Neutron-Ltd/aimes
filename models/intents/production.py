@@ -72,12 +72,12 @@ class SchedulingResult(BaseModel):
 
 
 class CapacityForecastParams(BaseModel):
-    line_id: str
+    line_id: Optional[str] = None
     forecast_days: int = 14
 
 
 class CapacityForecastResult(BaseModel):
-    line_id: str
+    line_id: Optional[str] = None
     capacity_utilization: float
     overtime_hours_estimate: float
     personnel_gap: int

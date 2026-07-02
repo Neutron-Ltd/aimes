@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections import Counter
 from datetime import datetime
 from typing import Any, Optional
 
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.dashboard.base import (
     bucket_label,
@@ -17,7 +17,6 @@ from core.dashboard.base import (
     resolve_date_range,
     tool_data,
 )
-from core.db import get_session
 from models.dashboard import (
     AssistantDashboardResponse,
     DashboardChartSlot,
@@ -39,27 +38,26 @@ def _area_filter(line_id: Optional[str], alias: str = "qi") -> tuple[str, dict[s
 
 
 async def _fetch_daily_defect_rates(
-    line_id: Optional[str], start: datetime, end: datetime
+    session: AsyncSession,
+    line_id: Optional[str],
+    start: datetime,
+    end: datetime,
 ) -> tuple[list[str], list[float]]:
-    session = await get_session()
-    try:
-        area_sql, area_bind = _area_filter(line_id, "qi")
-        sql = text(
-            f"""
-            SELECT DATE(qi.test_start_time) AS bucket,
-                   SUM(COALESCE(qi.real_qty, 0)) AS inspected,
-                   SUM(COALESCE(qi.error_qty, 0)) AS defects
-            FROM n2admin.t_qm_inspect_info qi
-            WHERE qi.test_start_time BETWEEN :start_date AND :end_date
-            {area_sql}
-            GROUP BY DATE(qi.test_start_time)
-            ORDER BY bucket
-            """
-        )
-        bind = {"start_date": start, "end_date": end, **area_bind}
-        rows = (await session.execute(sql, bind)).mappings().all()
-    finally:
-        await session.close()
+    area_sql, area_bind = _area_filter(line_id, "qi")
+    sql = text(
+        f"""
+        SELECT DATE(qi.test_start_time) AS bucket,
+               SUM(COALESCE(qi.real_qty, 0)) AS inspected,
+               SUM(COALESCE(qi.error_qty, 0)) AS defects
+        FROM n2admin.t_qm_inspect_info qi
+        WHERE qi.test_start_time BETWEEN :start_date AND :end_date
+        {area_sql}
+        GROUP BY DATE(qi.test_start_time)
+        ORDER BY bucket
+        """
+    )
+    bind = {"start_date": start, "end_date": end, **area_bind}
+    rows = (await session.execute(sql, bind)).mappings().all()
 
     labels: list[str] = []
     series: list[float] = []
@@ -74,21 +72,20 @@ async def _fetch_daily_defect_rates(
 
 
 async def _fetch_problem_summary(
-    line_id: Optional[str], start: datetime, end: datetime
+    session: AsyncSession,
+    line_id: Optional[str],
+    start: datetime,
+    end: datetime,
 ) -> dict[str, Any]:
-    session = await get_session()
-    try:
-        sql = text(
-            """
-            SELECT close_time
-            FROM n2admin.t_qm_problem_report pr
-            WHERE pr.create_time BETWEEN :start_date AND :end_date
-            """
-        )
-        bind = {"start_date": start, "end_date": end}
-        rows = (await session.execute(sql, bind)).mappings().all()
-    finally:
-        await session.close()
+    sql = text(
+        """
+        SELECT close_time
+        FROM n2admin.t_qm_problem_report pr
+        WHERE pr.create_time BETWEEN :start_date AND :end_date
+        """
+    )
+    bind = {"start_date": start, "end_date": end}
+    rows = (await session.execute(sql, bind)).mappings().all()
 
     total = len(rows)
     closed = sum(1 for row in rows if row.get("close_time") is not None)
@@ -107,6 +104,8 @@ class QualityDashboardBuilder:
         locale: str,
         lookback_days: int,
         context: MCPContext,
+        *,
+        session: AsyncSession,
     ) -> AssistantDashboardResponse:
         start, end = resolve_date_range(lookback_days)
 
@@ -120,17 +119,14 @@ class QualityDashboardBuilder:
             end_date=end,
         )
 
-        (
-            defect_result,
-            root_cause_result,
-            daily_result,
-            problem_summary,
-        ) = await asyncio.gather(
-            get_quality_defect_aggregation_tool.run(defect_params, context),
-            analyze_defect_root_cause_tool.run(root_cause_params, context),
-            _fetch_daily_defect_rates(line_id, start, end),
-            _fetch_problem_summary(line_id, start, end),
+        defect_result = await get_quality_defect_aggregation_tool.run(
+            defect_params, context, session=session
         )
+        root_cause_result = await analyze_defect_root_cause_tool.run(
+            root_cause_params, context, session=session
+        )
+        daily_result = await _fetch_daily_defect_rates(session, line_id, start, end)
+        problem_summary = await _fetch_problem_summary(session, line_id, start, end)
 
         daily_labels, daily_rates = daily_result
 
@@ -246,7 +242,7 @@ class QualityDashboardBuilder:
                 if not label:
                     continue
                 counter[label[:16]] += int(float(item.get("score") or 1) * 10) or 1
-            top = counter.most_common(5)
+            top = counter.most_common()
             if top:
                 charts.append(
                     DashboardChartSlot(
@@ -296,18 +292,17 @@ class QualityDashboardBuilder:
 
         breakdown = defect_data.get("breakdown") or []
         if breakdown:
-            top_steps = breakdown[:5]
             charts.append(
                 DashboardChartSlot(
                     index=4,
                     chart_type="bar",
                     x_data=[
                         str(item.get("process_code") or f"P{i + 1}")
-                        for i, item in enumerate(top_steps)
+                        for i, item in enumerate(breakdown)
                     ],
                     series=[
                         max(100.0 - float(item.get("defect_rate") or 0), 0.0)
-                        for item in top_steps
+                        for item in breakdown
                     ],
                     source=DataSource.LIVE,
                 )

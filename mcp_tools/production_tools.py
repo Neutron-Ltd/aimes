@@ -20,10 +20,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.db import get_session
 from core.logging import get_logger
 from core.math_safeguard import period_over_period_growth_rate, population_std_dev
-from mcp_tools.base import BaseMCPTool
+from mcp_tools.base import BaseMCPTool, optional_session
 from models.schemas import MCPContext
 
 logger = get_logger(__name__)
@@ -152,7 +151,7 @@ def _equipment_scope_filter(line_id: Optional[str], device_sn: Optional[str]) ->
             SELECT device_sn FROM n2admin.t_co_device
             WHERE cd_location = :line_id
         )"""
-    return "1=0"
+    return "1=1"
 
 
 def _line_filter(
@@ -162,7 +161,9 @@ def _line_filter(
 ) -> str:
     if yield_type == YieldType.EQUIPMENT:
         return _equipment_scope_filter(line_id, device_sn)
-    return "line.area_sn = :line_id"
+    if line_id:
+        return "line.area_sn = :line_id"
+    return "1=1"
 
 
 def _time_column(yield_type: YieldType) -> str:
@@ -368,12 +369,15 @@ class GetYieldAggregationTool(BaseMCPTool[YieldAggregationParams, YieldAggregati
     )
 
     async def execute(
-        self, params: YieldAggregationParams, context: MCPContext
+        self,
+        params: YieldAggregationParams,
+        context: MCPContext,
+        *,
+        session: AsyncSession | None = None,
     ) -> YieldAggregationResult:
-        session = await get_session()
-        try:
+        async with optional_session(session) as db:
             rows = await _fetch_aggregation_rows(
-                session,
+                db,
                 yield_type=params.yield_type,
                 line_id=params.line_id,
                 device_sn=params.device_sn,
@@ -393,8 +397,6 @@ class GetYieldAggregationTool(BaseMCPTool[YieldAggregationParams, YieldAggregati
                 value=round(value, 4),
                 breakdown=breakdown,
             )
-        finally:
-            await session.close()
 
 
 # ---------------------------------------------------------------------------
@@ -412,13 +414,16 @@ class GetYieldAnomaliesAndPeaksTool(
     )
 
     async def execute(
-        self, params: YieldAnomaliesParams, context: MCPContext
+        self,
+        params: YieldAnomaliesParams,
+        context: MCPContext,
+        *,
+        session: AsyncSession | None = None,
     ) -> YieldAnomaliesResult:
-        session = await get_session()
-        try:
+        async with optional_session(session) as db:
             # Hourly series for anomaly analysis
             rows = await _fetch_aggregation_rows(
-                session,
+                db,
                 yield_type=params.yield_type,
                 line_id=params.line_id,
                 device_sn=params.device_sn,
@@ -444,7 +449,7 @@ class GetYieldAnomaliesAndPeaksTool(
                 )
                 # Compare each hourly bucket's achievement rate to threshold
                 daily_rows = await _fetch_aggregation_rows(
-                    session,
+                    db,
                     yield_type=params.yield_type,
                     line_id=params.line_id,
                     device_sn=params.device_sn,
@@ -490,8 +495,6 @@ class GetYieldAnomaliesAndPeaksTool(
                 analysis_type=params.analysis_type.value,
                 result=result,
             )
-        finally:
-            await session.close()
 
 
 # ---------------------------------------------------------------------------
@@ -508,12 +511,15 @@ class CompareYieldPeriodsTool(
     )
 
     async def execute(
-        self, params: CompareYieldPeriodsParams, context: MCPContext
+        self,
+        params: CompareYieldPeriodsParams,
+        context: MCPContext,
+        *,
+        session: AsyncSession | None = None,
     ) -> CompareYieldPeriodsResult:
-        session = await get_session()
-        try:
+        async with optional_session(session) as db:
             period_1_total = await _fetch_period_total(
-                session,
+                db,
                 yield_type=params.yield_type,
                 line_id=params.line_id,
                 device_sn=params.device_sn,
@@ -521,7 +527,7 @@ class CompareYieldPeriodsTool(
                 end_date=params.period_1_end,
             )
             period_2_total = await _fetch_period_total(
-                session,
+                db,
                 yield_type=params.yield_type,
                 line_id=params.line_id,
                 device_sn=params.device_sn,
@@ -540,8 +546,6 @@ class CompareYieldPeriodsTool(
                 period_2_total=round(period_2_total, 4),
                 growth_rate=round(growth, 4) if growth is not None else None,
             )
-        finally:
-            await session.close()
 
 
 # ---------------------------------------------------------------------------
@@ -553,11 +557,10 @@ class GetProductYieldTool(BaseMCPTool):
     name = "get_product_yield"
     description = "Product-specific reported yield per line with t_co_item metadata."
 
-    async def execute(self, params, context: MCPContext):
+    async def execute(self, params, context: MCPContext, *, session: AsyncSession | None = None):
         from models.intents.production import ProductYieldParams, ProductYieldResult
 
-        session = await get_session()
-        try:
+        async with optional_session(session) as db:
             sql = text(
                 """
                 SELECT date_trunc('day', COALESCE(wd.in_time, wd.create_time)) AS bucket,
@@ -576,7 +579,7 @@ class GetProductYieldTool(BaseMCPTool):
                 ORDER BY bucket
                 """
             )
-            result = await session.execute(
+            result = await db.execute(
                 sql,
                 {
                     "line_id": params.line_id,
@@ -601,8 +604,6 @@ class GetProductYieldTool(BaseMCPTool):
                 total_qty=round(total, 4),
                 breakdown=breakdown,
             )
-        finally:
-            await session.close()
 
 
 # ---------------------------------------------------------------------------
@@ -614,11 +615,10 @@ class GetDeviceProductionRateTool(BaseMCPTool):
     name = "get_device_production_rate"
     description = "Average equipment production rate joined with t_co_device."
 
-    async def execute(self, params, context: MCPContext):
+    async def execute(self, params, context: MCPContext, *, session: AsyncSession | None = None):
         from models.intents.production import DeviceRateParams, DeviceRateResult
 
-        session = await get_session()
-        try:
+        async with optional_session(session) as db:
             filters = ["eq.create_time BETWEEN :start_date AND :end_date"]
             bind: dict[str, Any] = {
                 "start_date": params.start_date,
@@ -649,7 +649,7 @@ class GetDeviceProductionRateTool(BaseMCPTool):
                 ORDER BY avg_rate DESC
                 """
             )
-            result = await session.execute(sql, bind)
+            result = await db.execute(sql, bind)
             devices = [
                 {
                     "device_sn": r["device_sn"],
@@ -660,8 +660,6 @@ class GetDeviceProductionRateTool(BaseMCPTool):
                 for r in result.mappings().all()
             ]
             return DeviceRateResult(devices=devices)
-        finally:
-            await session.close()
 
 
 # ---------------------------------------------------------------------------
@@ -673,14 +671,13 @@ class GetStandardTimeAchievementTool(BaseMCPTool):
     name = "get_standard_time_achievement"
     description = "Actual output vs standard_time goal percentage."
 
-    async def execute(self, params, context: MCPContext):
+    async def execute(self, params, context: MCPContext, *, session: AsyncSession | None = None):
         from models.intents.production import (
             StandardTimeAchievementParams,
             StandardTimeAchievementResult,
         )
 
-        session = await get_session()
-        try:
+        async with optional_session(session) as db:
             sql = text(
                 """
                 SELECT SUM(COALESCE(eq.finish_qty, 0)) AS actual_qty,
@@ -695,7 +692,7 @@ class GetStandardTimeAchievementTool(BaseMCPTool):
                   AND eq.create_time BETWEEN :start_date AND :end_date
                 """
             )
-            result = await session.execute(
+            result = await db.execute(
                 sql,
                 {
                     "line_id": params.line_id,
@@ -718,8 +715,6 @@ class GetStandardTimeAchievementTool(BaseMCPTool):
                 standard_time=round(std_time, 4),
                 elapsed_hours=round(elapsed, 4),
             )
-        finally:
-            await session.close()
 
 
 # Singleton instances for orchestrator registration

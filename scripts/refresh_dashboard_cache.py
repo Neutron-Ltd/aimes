@@ -57,7 +57,7 @@ async def main() -> int:
                 if args.module in ("production", "quality", "equipment"):
                     await refresh_dashboard_module(
                         args.module,
-                        line_id=settings.default_line_id,
+                        line_id=None,
                         locale=locale,
                         lookback_days=args.lookback_days,
                         context=context,

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import get_settings
 from core.dashboard.base import (
@@ -15,7 +15,6 @@ from core.dashboard.base import (
     format_percent,
     tool_data,
 )
-from core.db import get_session
 from models.dashboard import (
     AssistantDashboardResponse,
     DashboardChartSlot,
@@ -41,54 +40,52 @@ def _reference_datetime() -> datetime:
 
 
 async def _fetch_stock_summary(
-    wh_code: Optional[str], ref_date: datetime
+    session: AsyncSession,
+    wh_code: Optional[str],
+    ref_date: datetime,
 ) -> dict[str, Any]:
-    session = await get_session()
     expiring_cutoff = ref_date + timedelta(days=30)
-    try:
-        filters = ["s.item_qty > 0"]
-        bind: dict[str, Any] = {
-            "ref_date": ref_date,
-            "expiring_cutoff": expiring_cutoff,
-        }
-        if wh_code:
-            filters.append("s.wh_code = :wh_code")
-            bind["wh_code"] = wh_code
+    filters = ["s.item_qty > 0"]
+    bind: dict[str, Any] = {
+        "ref_date": ref_date,
+        "expiring_cutoff": expiring_cutoff,
+    }
+    if wh_code:
+        filters.append("s.wh_code = :wh_code")
+        bind["wh_code"] = wh_code
 
-        sql = text(
-            f"""
-            SELECT COUNT(*) AS total,
-                   SUM(
-                       CASE
-                           WHEN COALESCE(ci.min_stock, 0) > 0
-                                AND s.item_qty < ci.min_stock
-                           THEN 1 ELSE 0
-                       END
-                   ) AS low_stock,
-                   SUM(
-                       CASE
-                           WHEN s.invalid_date IS NOT NULL
-                                AND s.invalid_date <= :expiring_cutoff
-                           THEN 1 ELSE 0
-                       END
-                   ) AS expiring,
-                   AVG(
-                       CASE
-                           WHEN s.instock_time IS NOT NULL
-                           THEN EXTRACT(
-                               EPOCH FROM (:ref_date - s.instock_time)
-                           ) / 86400.0
-                           ELSE NULL
-                       END
-                   ) AS avg_turnover_days
-            FROM n2admin.t_wms_stock_info s
-            LEFT JOIN n2admin.t_co_item ci ON s.item_code = ci.item_code
-            WHERE {" AND ".join(filters)}
-            """
-        )
-        row = (await session.execute(sql, bind)).mappings().first()
-    finally:
-        await session.close()
+    sql = text(
+        f"""
+        SELECT COUNT(*) AS total,
+               SUM(
+                   CASE
+                       WHEN COALESCE(ci.min_stock, 0) > 0
+                            AND s.item_qty < ci.min_stock
+                       THEN 1 ELSE 0
+                   END
+               ) AS low_stock,
+               SUM(
+                   CASE
+                       WHEN s.invalid_date IS NOT NULL
+                            AND s.invalid_date <= :expiring_cutoff
+                       THEN 1 ELSE 0
+                   END
+               ) AS expiring,
+               AVG(
+                   CASE
+                       WHEN s.instock_time IS NOT NULL
+                       THEN EXTRACT(
+                           EPOCH FROM (:ref_date - s.instock_time)
+                       ) / 86400.0
+                       ELSE NULL
+                   END
+               ) AS avg_turnover_days
+        FROM n2admin.t_wms_stock_info s
+        LEFT JOIN n2admin.t_co_item ci ON s.item_code = ci.item_code
+        WHERE {" AND ".join(filters)}
+        """
+    )
+    row = (await session.execute(sql, bind)).mappings().first()
 
     total = int(row.get("total") or 0) if row else 0
     low_stock = int(row.get("low_stock") or 0) if row else 0
@@ -108,59 +105,57 @@ async def _fetch_stock_summary(
 
 
 async def _fetch_age_buckets(
-    wh_code: Optional[str], ref_date: datetime
+    session: AsyncSession,
+    wh_code: Optional[str],
+    ref_date: datetime,
 ) -> list[int]:
-    session = await get_session()
-    try:
-        filters = ["s.item_qty > 0", "s.instock_time IS NOT NULL"]
-        bind: dict[str, Any] = {"ref_date": ref_date}
-        if wh_code:
-            filters.append("s.wh_code = :wh_code")
-            bind["wh_code"] = wh_code
+    filters = ["s.item_qty > 0", "s.instock_time IS NOT NULL"]
+    bind: dict[str, Any] = {"ref_date": ref_date}
+    if wh_code:
+        filters.append("s.wh_code = :wh_code")
+        bind["wh_code"] = wh_code
 
-        sql = text(
-            f"""
-            SELECT
-                SUM(
-                    CASE
-                        WHEN (DATE(:ref_date) - DATE(s.instock_time)) <= 30 THEN 1
-                        ELSE 0
-                    END
-                ) AS bucket_0,
-                SUM(
-                    CASE
-                        WHEN (DATE(:ref_date) - DATE(s.instock_time)) > 30
-                             AND (DATE(:ref_date) - DATE(s.instock_time)) <= 60
-                        THEN 1 ELSE 0
-                    END
-                ) AS bucket_1,
-                SUM(
-                    CASE
-                        WHEN (DATE(:ref_date) - DATE(s.instock_time)) > 60
-                             AND (DATE(:ref_date) - DATE(s.instock_time)) <= 90
-                        THEN 1 ELSE 0
-                    END
-                ) AS bucket_2,
-                SUM(
-                    CASE
-                        WHEN (DATE(:ref_date) - DATE(s.instock_time)) > 90
-                             AND (DATE(:ref_date) - DATE(s.instock_time)) <= 180
-                        THEN 1 ELSE 0
-                    END
-                ) AS bucket_3,
-                SUM(
-                    CASE
-                        WHEN (DATE(:ref_date) - DATE(s.instock_time)) > 180 THEN 1
-                        ELSE 0
-                    END
-                ) AS bucket_4
-            FROM n2admin.t_wms_stock_info s
-            WHERE {" AND ".join(filters)}
-            """
-        )
-        row = (await session.execute(sql, bind)).mappings().first()
-    finally:
-        await session.close()
+    sql = text(
+        f"""
+        SELECT
+            SUM(
+                CASE
+                    WHEN (DATE(:ref_date) - DATE(s.instock_time)) <= 30 THEN 1
+                    ELSE 0
+                END
+            ) AS bucket_0,
+            SUM(
+                CASE
+                    WHEN (DATE(:ref_date) - DATE(s.instock_time)) > 30
+                         AND (DATE(:ref_date) - DATE(s.instock_time)) <= 60
+                    THEN 1 ELSE 0
+                END
+            ) AS bucket_1,
+            SUM(
+                CASE
+                    WHEN (DATE(:ref_date) - DATE(s.instock_time)) > 60
+                         AND (DATE(:ref_date) - DATE(s.instock_time)) <= 90
+                    THEN 1 ELSE 0
+                END
+            ) AS bucket_2,
+            SUM(
+                CASE
+                    WHEN (DATE(:ref_date) - DATE(s.instock_time)) > 90
+                         AND (DATE(:ref_date) - DATE(s.instock_time)) <= 180
+                    THEN 1 ELSE 0
+                END
+            ) AS bucket_3,
+            SUM(
+                CASE
+                    WHEN (DATE(:ref_date) - DATE(s.instock_time)) > 180 THEN 1
+                    ELSE 0
+                END
+            ) AS bucket_4
+        FROM n2admin.t_wms_stock_info s
+        WHERE {" AND ".join(filters)}
+        """
+    )
+    row = (await session.execute(sql, bind)).mappings().first()
 
     if not row:
         return [0, 0, 0, 0, 0]
@@ -173,32 +168,30 @@ async def _fetch_age_buckets(
     ]
 
 
-async def _fetch_bin_utilization(wh_code: Optional[str]) -> Optional[float]:
-    session = await get_session()
-    try:
-        area_sql = text(
-            """
-            SELECT COUNT(DISTINCT area_sn) AS total_bins
-            FROM n2admin.t_wms_area
-            """
-        )
-        stock_bind: dict[str, Any] = {}
-        stock_filter = "WHERE item_qty > 0 AND storage_code IS NOT NULL"
-        if wh_code:
-            stock_filter += " AND wh_code = :wh_code"
-            stock_bind["wh_code"] = wh_code
+async def _fetch_bin_utilization(
+    session: AsyncSession, wh_code: Optional[str]
+) -> Optional[float]:
+    area_sql = text(
+        """
+        SELECT COUNT(DISTINCT area_sn) AS total_bins
+        FROM n2admin.t_wms_area
+        """
+    )
+    stock_bind: dict[str, Any] = {}
+    stock_filter = "WHERE item_qty > 0 AND storage_code IS NOT NULL"
+    if wh_code:
+        stock_filter += " AND wh_code = :wh_code"
+        stock_bind["wh_code"] = wh_code
 
-        stock_sql = text(
-            f"""
-            SELECT COUNT(DISTINCT storage_code) AS occupied_bins
-            FROM n2admin.t_wms_stock_info
-            {stock_filter}
-            """
-        )
-        area_row = (await session.execute(area_sql)).mappings().first()
-        stock_row = (await session.execute(stock_sql, stock_bind)).mappings().first()
-    finally:
-        await session.close()
+    stock_sql = text(
+        f"""
+        SELECT COUNT(DISTINCT storage_code) AS occupied_bins
+        FROM n2admin.t_wms_stock_info
+        {stock_filter}
+        """
+    )
+    area_row = (await session.execute(area_sql)).mappings().first()
+    stock_row = (await session.execute(stock_sql, stock_bind)).mappings().first()
 
     total_bins = int(area_row.get("total_bins") or 0) if area_row else 0
     occupied = int(stock_row.get("occupied_bins") or 0) if stock_row else 0
@@ -214,20 +207,22 @@ class WarehouseDashboardBuilder:
         locale: str,
         lookback_days: int,
         context: MCPContext,
+        *,
+        session: AsyncSession,
     ) -> AssistantDashboardResponse:
         ref_date = _reference_datetime()
         inv_params = InventoryStatusParams(wh_code=wh_code)
         obs_params = ObsoleteProfileParams(wh_code=wh_code, dull_days_threshold=90)
 
-        inventory_result, obsolete_result, summary, age_buckets, bin_util = (
-            await asyncio.gather(
-                get_inventory_status_tool.run(inv_params, context),
-                profile_obsolete_inventory_tool.run(obs_params, context),
-                _fetch_stock_summary(wh_code, ref_date),
-                _fetch_age_buckets(wh_code, ref_date),
-                _fetch_bin_utilization(wh_code),
-            )
+        inventory_result = await get_inventory_status_tool.run(
+            inv_params, context, session=session
         )
+        obsolete_result = await profile_obsolete_inventory_tool.run(
+            obs_params, context, session=session
+        )
+        summary = await _fetch_stock_summary(session, wh_code, ref_date)
+        age_buckets = await _fetch_age_buckets(session, wh_code, ref_date)
+        bin_util = await _fetch_bin_utilization(session, wh_code)
 
         inv_data = tool_data(inventory_result) or {}
         low_stock_items = inv_data.get("low_stock") or []

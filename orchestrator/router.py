@@ -2,6 +2,10 @@
 F0.3 — LLM Orchestrator (Intent Router).
 
 Pipeline: parse_intent → RAG enrichment → MCP dispatch → synthesis report.
+
+Chat queries (POST /api/v1/query) always execute live MCP tools against
+PostgreSQL. They must never read from the SQLite dashboard cache in
+core/dashboard_cache/.
 """
 
 from __future__ import annotations

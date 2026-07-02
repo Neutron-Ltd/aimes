@@ -6,9 +6,9 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.db import get_session
-from mcp_tools.base import BaseMCPTool
+from mcp_tools.base import BaseMCPTool, optional_session
 from models.intents.warehouse import (
     InboundOutboundParams,
     InboundOutboundResult,
@@ -29,10 +29,13 @@ class GetInventoryStatusTool(BaseMCPTool[InventoryStatusParams, InventoryStatusR
     description = "Low stock and expiring inventory from t_wms_stock_info."
 
     async def execute(
-        self, params: InventoryStatusParams, context: MCPContext
+        self,
+        params: InventoryStatusParams,
+        context: MCPContext,
+        *,
+        session: AsyncSession | None = None,
     ) -> InventoryStatusResult:
-        session = await get_session()
-        try:
+        async with optional_session(session) as db:
             filters: list[str] = []
             bind: dict[str, Any] = {}
             if params.wh_code:
@@ -52,10 +55,8 @@ class GetInventoryStatusTool(BaseMCPTool[InventoryStatusParams, InventoryStatusR
                 {where}
                 """
             )
-            result = await session.execute(sql, bind)
+            result = await db.execute(sql, bind)
             rows = [dict(r) for r in result.mappings().all()]
-        finally:
-            await session.close()
 
         low_stock = []
         expiring = []
@@ -93,10 +94,13 @@ class GuideInboundOutboundTool(BaseMCPTool[InboundOutboundParams, InboundOutboun
     description = "Bay recommendation and FIFO lot ordering."
 
     async def execute(
-        self, params: InboundOutboundParams, context: MCPContext
+        self,
+        params: InboundOutboundParams,
+        context: MCPContext,
+        *,
+        session: AsyncSession | None = None,
     ) -> InboundOutboundResult:
-        session = await get_session()
-        try:
+        async with optional_session(session) as db:
             area_sql = text(
                 """
                 SELECT area_sn, area_name
@@ -117,10 +121,8 @@ class GuideInboundOutboundTool(BaseMCPTool[InboundOutboundParams, InboundOutboun
                 "wh_code": params.wh_code,
                 "item_code": params.item_code,
             }
-            area = (await session.execute(area_sql)).mappings().first()
-            lots = [dict(r) for r in (await session.execute(stock_sql, bind)).mappings().all()]
-        finally:
-            await session.close()
+            area = (await db.execute(area_sql)).mappings().first()
+            lots = [dict(r) for r in (await db.execute(stock_sql, bind)).mappings().all()]
 
         recommended = None
         if area:
@@ -148,10 +150,13 @@ class ProfileObsoleteInventoryTool(BaseMCPTool[ObsoleteProfileParams, ObsoletePr
     description = "Stagnant stock profile using dull_cycle from t_co_item."""
 
     async def execute(
-        self, params: ObsoleteProfileParams, context: MCPContext
+        self,
+        params: ObsoleteProfileParams,
+        context: MCPContext,
+        *,
+        session: AsyncSession | None = None,
     ) -> ObsoleteProfileResult:
-        session = await get_session()
-        try:
+        async with optional_session(session) as db:
             filters = ["s.item_qty > 0"]
             bind: dict[str, Any] = {}
             if params.wh_code:
@@ -168,10 +173,8 @@ class ProfileObsoleteInventoryTool(BaseMCPTool[ObsoleteProfileParams, ObsoletePr
                 """
             )
             bind["default_dull"] = params.dull_days_threshold
-            result = await session.execute(sql, bind)
+            result = await db.execute(sql, bind)
             rows = [dict(r) for r in result.mappings().all()]
-        finally:
-            await session.close()
 
         stagnant = []
         cutoff = datetime.now() - timedelta(days=params.dull_days_threshold)
@@ -196,10 +199,13 @@ class TraceMaterialForwardTool(BaseMCPTool[TraceForwardParams, TraceForwardResul
     description = "Forward trace: material lot → WIP → finished lot (2-hop)."""
 
     async def execute(
-        self, params: TraceForwardParams, context: MCPContext
+        self,
+        params: TraceForwardParams,
+        context: MCPContext,
+        *,
+        session: AsyncSession | None = None,
     ) -> TraceForwardResult:
-        session = await get_session()
-        try:
+        async with optional_session(session) as db:
             sql = text(
                 """
                 SELECT m.item_code, m.item_lot, m.item_sn
@@ -211,7 +217,7 @@ class TraceMaterialForwardTool(BaseMCPTool[TraceForwardParams, TraceForwardResul
             mid_rows = [
                 dict(r)
                 for r in (
-                    await session.execute(
+                    await db.execute(
                         sql,
                         {"material_batch": params.material_batch},
                     )
@@ -232,14 +238,12 @@ class TraceMaterialForwardTool(BaseMCPTool[TraceForwardParams, TraceForwardResul
             wip_rows = [
                 dict(r)
                 for r in (
-                    await session.execute(
+                    await db.execute(
                         wip_sql,
                         {"material_batch": params.material_batch},
                     )
                 ).mappings().all()
             ]
-        finally:
-            await session.close()
 
         chain = [{"hop": 1, "source": "t_wms_mid_item", "records": mid_rows}]
         if wip_rows:
@@ -253,10 +257,13 @@ class TraceProductReverseTool(BaseMCPTool[TraceReverseParams, TraceReverseResult
     description = "Reverse trace: finished lot → item SN log → WMS mid item (2-hop)."""
 
     async def execute(
-        self, params: TraceReverseParams, context: MCPContext
+        self,
+        params: TraceReverseParams,
+        context: MCPContext,
+        *,
+        session: AsyncSession | None = None,
     ) -> TraceReverseResult:
-        session = await get_session()
-        try:
+        async with optional_session(session) as db:
             wip_sql = text(
                 """
                 SELECT wd.pro_lot, wd.model_code, wd.pro_qty
@@ -268,7 +275,7 @@ class TraceProductReverseTool(BaseMCPTool[TraceReverseParams, TraceReverseResult
             wip_rows = [
                 dict(r)
                 for r in (
-                    await session.execute(
+                    await db.execute(
                         wip_sql,
                         {"finished_lot": params.finished_lot},
                     )
@@ -289,14 +296,12 @@ class TraceProductReverseTool(BaseMCPTool[TraceReverseParams, TraceReverseResult
             mid_rows = [
                 dict(r)
                 for r in (
-                    await session.execute(
+                    await db.execute(
                         mid_sql,
                         {"finished_lot": params.finished_lot},
                     )
                 ).mappings().all()
             ]
-        finally:
-            await session.close()
 
         chain = [{"hop": 1, "source": "t_wip_detail", "records": wip_rows}]
         if mid_rows:

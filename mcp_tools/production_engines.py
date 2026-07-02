@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from core.analytics.capacity import forecast_capacity
 from core.analytics.root_cause import analyze_root_cause
 from core.analytics.scheduling import optimize_schedule
@@ -21,7 +23,13 @@ class GetProductionRootCauseTool(BaseMCPTool[RootCauseParams, RootCauseResult]):
     name = "get_production_root_cause"
     description = "Rank probable root causes for production yield dips."
 
-    async def execute(self, params: RootCauseParams, context: MCPContext) -> RootCauseResult:
+    async def execute(
+        self,
+        params: RootCauseParams,
+        context: MCPContext,
+        *,
+        session: AsyncSession | None = None,
+    ) -> RootCauseResult:
         causes = await analyze_root_cause(params)
         return RootCauseResult(
             line_id=params.line_id,
@@ -33,7 +41,13 @@ class OptimizeProductionScheduleTool(BaseMCPTool[SchedulingParams, SchedulingRes
     name = "optimize_production_schedule"
     description = "Heuristic schedule optimization with priority scores."
 
-    async def execute(self, params: SchedulingParams, context: MCPContext) -> SchedulingResult:
+    async def execute(
+        self,
+        params: SchedulingParams,
+        context: MCPContext,
+        *,
+        session: AsyncSession | None = None,
+    ) -> SchedulingResult:
         schedule = await optimize_schedule(params)
         return SchedulingResult(
             line_id=params.line_id,
@@ -46,9 +60,13 @@ class ForecastCapacityHrTool(BaseMCPTool[CapacityForecastParams, CapacityForecas
     description = "Forecast capacity utilization and personnel gaps."
 
     async def execute(
-        self, params: CapacityForecastParams, context: MCPContext
+        self,
+        params: CapacityForecastParams,
+        context: MCPContext,
+        *,
+        session: AsyncSession | None = None,
     ) -> CapacityForecastResult:
-        forecast = await forecast_capacity(params)
+        forecast = await forecast_capacity(params, session=session)
         return CapacityForecastResult(
             line_id=params.line_id,
             capacity_utilization=float(forecast["capacity_utilization"]),

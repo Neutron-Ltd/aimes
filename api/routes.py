@@ -68,14 +68,8 @@ def _resolve_dashboard_params(
 ) -> tuple[Optional[str], Optional[str], str]:
     settings = get_settings()
 
-    if module == "production":
-        resolved_line = (line_id or settings.default_line_id).strip()
-        if not resolved_line:
-            raise HTTPException(status_code=400, detail="line_id is required")
-        return resolved_line, None, build_scope_key(module, line_id=resolved_line)
-
-    if module in ("quality", "equipment"):
-        resolved_line = (line_id or settings.default_line_id or "").strip() or None
+    if module in ("production", "quality", "equipment"):
+        resolved_line = (line_id or "").strip() or None
         return resolved_line, None, build_scope_key(module, line_id=resolved_line)
 
     resolved_wh = wh_code if wh_code is not None else settings.default_wh_code

@@ -29,11 +29,8 @@ class Settings(BaseSettings):
         ),
         validation_alias="DATABASE_URL",
     )
-    db_pool_size: int = 5
+    db_pool_size: int = 3
     default_workshop_id: str = "WS-001"
-    default_line_id: str = Field(
-        default="FDQ-SMT-3", validation_alias="DEFAULT_LINE_ID"
-    )
     default_wh_code: Optional[str] = Field(
         default=None, validation_alias="DEFAULT_WH_CODE"
     )

@@ -14,6 +14,7 @@ from core.dashboard.production import production_dashboard_builder
 from core.dashboard.quality import quality_dashboard_builder
 from core.dashboard.warehouse import warehouse_dashboard_builder
 from core.dashboard_cache import store
+from core.db import get_session
 from core.logging import get_logger
 from models.dashboard import AssistantDashboardResponse
 from models.schemas import MCPContext
@@ -122,27 +123,33 @@ async def build_dashboard_response(
     context: MCPContext,
 ) -> AssistantDashboardResponse:
     builder = BUILDERS[module]
-    if module == "production":
-        assert line_id
+    session = await get_session()
+    try:
+        if module == "production":
+            return await builder.build(
+                line_id=line_id,
+                locale=locale,
+                lookback_days=lookback_days,
+                context=context,
+                session=session,
+            )
+        if module in ("quality", "equipment"):
+            return await builder.build(
+                line_id=line_id,
+                locale=locale,
+                lookback_days=lookback_days,
+                context=context,
+                session=session,
+            )
         return await builder.build(
-            line_id=line_id,
+            wh_code=wh_code,
             locale=locale,
             lookback_days=lookback_days,
             context=context,
+            session=session,
         )
-    if module in ("quality", "equipment"):
-        return await builder.build(
-            line_id=line_id,
-            locale=locale,
-            lookback_days=lookback_days,
-            context=context,
-        )
-    return await builder.build(
-        wh_code=wh_code,
-        locale=locale,
-        lookback_days=lookback_days,
-        context=context,
-    )
+    finally:
+        await session.close()
 
 
 async def refresh_dashboard_module(
@@ -159,20 +166,18 @@ async def refresh_dashboard_module(
     scope_key = build_scope_key(module, line_id=line_id, wh_code=wh_code)
 
     if module == "production":
-        resolved_line = (line_id or settings.default_line_id).strip()
         response = await build_dashboard_response(
             module,
-            line_id=resolved_line,
+            line_id=line_id,
             wh_code=None,
             locale=locale,
             lookback_days=lookback_days,
             context=ctx,
         )
     elif module in ("quality", "equipment"):
-        resolved_line = (line_id or settings.default_line_id or "").strip() or None
         response = await build_dashboard_response(
             module,
-            line_id=resolved_line,
+            line_id=line_id,
             wh_code=None,
             locale=locale,
             lookback_days=lookback_days,
@@ -213,12 +218,12 @@ async def refresh_all_dashboards(
         for module in line_modules:
             await refresh_dashboard_module(
                 module,
-                line_id=settings.default_line_id,
+                line_id=None,
                 locale=locale,
                 lookback_days=lookback_days,
                 context=context,
             )
-            refreshed.append(f"{module}:{settings.default_line_id}:{locale}")
+            refreshed.append(f"{module}:{GLOBAL_SCOPE}:{locale}")
 
         for module in wh_modules:
             await refresh_dashboard_module(

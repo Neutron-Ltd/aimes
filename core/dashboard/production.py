@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 from datetime import date, datetime
 from typing import Any, Optional
 
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import get_settings
 from core.dashboard.base import (
@@ -19,7 +19,6 @@ from core.dashboard.base import (
     resolve_date_range,
     tool_data,
 )
-from core.db import get_session
 from models.dashboard import (
     AssistantDashboardResponse,
     DashboardChartSlot,
@@ -77,35 +76,39 @@ def _month_bucket_label(bucket: Any, locale: str) -> str:
     return dt.strftime("%b")
 
 
+def _line_area_filter(line_id: Optional[str]) -> tuple[str, dict[str, Any]]:
+    if not line_id:
+        return "", {}
+    return " AND line.area_sn = :line_id", {"line_id": line_id}
+
+
 async def _fetch_monthly_defect_counts(
-    line_id: str,
+    session: AsyncSession,
+    line_id: Optional[str],
     locale: str,
     months: int = DEFECT_CHART_MONTHS,
 ) -> tuple[list[str], list[float]]:
     start, end = _month_window(months)
-    session = await get_session()
-    try:
-        sql = text(
-            """
-            SELECT date_trunc('month', COALESCE(wd.in_time, wd.create_time)) AS bucket,
-                   SUM(COALESCE(wd.ng_qty, 0) + COALESCE(wd.scrap_qty, 0)) AS defect_qty
-            FROM n2admin.t_wip_detail wd
-            JOIN n2admin.t_co_area ws ON wd.work_stationsn = ws.area_sn
-            JOIN n2admin.t_co_area line ON ws.parent_sn = line.area_sn
-            WHERE line.area_sn = :line_id
-              AND COALESCE(wd.in_time, wd.create_time) BETWEEN :start_date AND :end_date
-            GROUP BY date_trunc('month', COALESCE(wd.in_time, wd.create_time))
-            ORDER BY bucket
-            """
+    line_sql, line_bind = _line_area_filter(line_id)
+    sql = text(
+        f"""
+        SELECT date_trunc('month', COALESCE(wd.in_time, wd.create_time)) AS bucket,
+               SUM(COALESCE(wd.ng_qty, 0) + COALESCE(wd.scrap_qty, 0)) AS defect_qty
+        FROM n2admin.t_wip_detail wd
+        JOIN n2admin.t_co_area ws ON wd.work_stationsn = ws.area_sn
+        JOIN n2admin.t_co_area line ON ws.parent_sn = line.area_sn
+        WHERE COALESCE(wd.in_time, wd.create_time) BETWEEN :start_date AND :end_date
+        {line_sql}
+        GROUP BY date_trunc('month', COALESCE(wd.in_time, wd.create_time))
+        ORDER BY bucket
+        """
+    )
+    rows = (
+        await session.execute(
+            sql,
+            {"start_date": start, "end_date": end, **line_bind},
         )
-        rows = (
-            await session.execute(
-                sql,
-                {"line_id": line_id, "start_date": start, "end_date": end},
-            )
-        ).mappings().all()
-    finally:
-        await session.close()
+    ).mappings().all()
 
     labels: list[str] = []
     series: list[float] = []
@@ -121,80 +124,78 @@ async def _fetch_monthly_defect_counts(
 class ProductionDashboardBuilder:
     async def build(
         self,
-        line_id: str,
+        line_id: Optional[str],
         locale: str,
         lookback_days: int,
         context: MCPContext,
+        *,
+        session: AsyncSession,
     ) -> AssistantDashboardResponse:
         start, end = resolve_date_range(lookback_days)
         prev_start, prev_end = previous_period(start, end)
 
-        (
-            achievement_total,
-            achievement_daily,
-            achievement_prev,
-            device_rates,
-            capacity,
-            anomalies,
-            monthly_defects,
-        ) = await asyncio.gather(
-            get_yield_aggregation_tool.run(
-                YieldAggregationParams(
-                    yield_type=YieldType.EQUIPMENT,
-                    line_id=line_id,
-                    start_date=start,
-                    end_date=end,
-                    group_by=GroupBy.TOTAL,
-                    metric=Metric.ACHIEVEMENT_RATE,
-                ),
-                context,
+        achievement_total = await get_yield_aggregation_tool.run(
+            YieldAggregationParams(
+                yield_type=YieldType.EQUIPMENT,
+                line_id=line_id,
+                start_date=start,
+                end_date=end,
+                group_by=GroupBy.TOTAL,
+                metric=Metric.ACHIEVEMENT_RATE,
             ),
-            get_yield_aggregation_tool.run(
-                YieldAggregationParams(
-                    yield_type=YieldType.EQUIPMENT,
-                    line_id=line_id,
-                    start_date=start,
-                    end_date=end,
-                    group_by=GroupBy.DAILY,
-                    metric=Metric.ACHIEVEMENT_RATE,
-                ),
-                context,
-            ),
-            compare_yield_periods_tool.run(
-                CompareYieldPeriodsParams(
-                    yield_type=YieldType.EQUIPMENT,
-                    line_id=line_id,
-                    period_1_start=prev_start,
-                    period_1_end=prev_end,
-                    period_2_start=start,
-                    period_2_end=end,
-                ),
-                context,
-            ),
-            get_device_production_rate_tool.run(
-                DeviceRateParams(
-                    line_id=line_id,
-                    start_date=start,
-                    end_date=end,
-                ),
-                context,
-            ),
-            forecast_capacity_hr_tool.run(
-                CapacityForecastParams(line_id=line_id, forecast_days=14),
-                context,
-            ),
-            get_yield_anomalies_tool.run(
-                YieldAnomaliesParams(
-                    yield_type=YieldType.EQUIPMENT,
-                    line_id=line_id,
-                    start_date=start,
-                    end_date=end,
-                    analysis_type=AnalysisType.BELOW_STANDARD,
-                ),
-                context,
-            ),
-            _fetch_monthly_defect_counts(line_id, locale),
+            context,
+            session=session,
         )
+        achievement_daily = await get_yield_aggregation_tool.run(
+            YieldAggregationParams(
+                yield_type=YieldType.EQUIPMENT,
+                line_id=line_id,
+                start_date=start,
+                end_date=end,
+                group_by=GroupBy.DAILY,
+                metric=Metric.ACHIEVEMENT_RATE,
+            ),
+            context,
+            session=session,
+        )
+        achievement_prev = await compare_yield_periods_tool.run(
+            CompareYieldPeriodsParams(
+                yield_type=YieldType.EQUIPMENT,
+                line_id=line_id,
+                period_1_start=prev_start,
+                period_1_end=prev_end,
+                period_2_start=start,
+                period_2_end=end,
+            ),
+            context,
+            session=session,
+        )
+        device_rates = await get_device_production_rate_tool.run(
+            DeviceRateParams(
+                line_id=line_id,
+                start_date=start,
+                end_date=end,
+            ),
+            context,
+            session=session,
+        )
+        capacity = await forecast_capacity_hr_tool.run(
+            CapacityForecastParams(line_id=line_id, forecast_days=14),
+            context,
+            session=session,
+        )
+        anomalies = await get_yield_anomalies_tool.run(
+            YieldAnomaliesParams(
+                yield_type=YieldType.EQUIPMENT,
+                line_id=line_id,
+                start_date=start,
+                end_date=end,
+                analysis_type=AnalysisType.BELOW_STANDARD,
+            ),
+            context,
+            session=session,
+        )
+        monthly_defects = await _fetch_monthly_defect_counts(session, line_id, locale)
 
         defect_labels, defect_series = monthly_defects
 
@@ -333,16 +334,15 @@ class ProductionDashboardBuilder:
         dev_data = tool_data(device_rates)
         devices = (dev_data or {}).get("devices") or []
         if devices:
-            top = devices[:5]
             charts.append(
                 DashboardChartSlot(
                     index=3,
                     chart_type="bar",
                     x_data=[
                         str(d.get("device_name") or d.get("device_sn") or "")[:12]
-                        for d in top
+                        for d in devices
                     ],
-                    series=[float(d.get("avg_rate") or 0) for d in top],
+                    series=[float(d.get("avg_rate") or 0) for d in devices],
                     source=DataSource.LIVE,
                 )
             )
@@ -371,13 +371,13 @@ class ProductionDashboardBuilder:
                     index=5,
                     chart_type="bar",
                     x_data=[
-                        bucket_label(row.get("bucket"), locale) for row in flagged[:6]
+                        bucket_label(row.get("bucket"), locale) for row in flagged
                     ],
                     series=[
                         float(row.get("achievement_rate") or 0) * 100
                         if float(row.get("achievement_rate") or 0) <= 1
                         else float(row.get("achievement_rate") or 0)
-                        for row in flagged[:6]
+                        for row in flagged
                     ],
                     source=DataSource.LIVE,
                 )
@@ -408,14 +408,15 @@ class ProductionDashboardBuilder:
         self,
         kpis: list[DashboardKpiSlot],
         charts: list[DashboardChartSlot],
-        line_id: str,
+        line_id: Optional[str],
         locale: str,
     ) -> str:
+        scope = line_id or ("全部产线" if locale.startswith("zh") else "all lines")
         live_kpis = [k for k in kpis if k.source == DataSource.LIVE]
         if not live_kpis:
             if locale.startswith("zh"):
-                return f"{line_id} 产线数据暂不可用，请稍后重试或通过 AI 助手提问。"
-            return f"Live data for line {line_id} is unavailable. Try again or ask the AI assistant."
+                return f"{scope} 产线数据暂不可用，请稍后重试或通过 AI 助手提问。"
+            return f"Live data for {scope} is unavailable. Try again or ask the AI assistant."
 
         kpi0 = next((k for k in kpis if k.index == 0), None)
         cap = next(
@@ -423,7 +424,7 @@ class ProductionDashboardBuilder:
             None,
         )
         if locale.startswith("zh"):
-            parts = [f"产线 {line_id} 最新扫描完成。"]
+            parts = [f"产线 {scope} 最新扫描完成。"]
             if kpi0:
                 parts.append(f"计划达成率 {kpi0.value}。")
             if cap and cap.gauge_value is not None:
@@ -431,7 +432,7 @@ class ProductionDashboardBuilder:
             parts.append("可通过右侧 AI 助手深入分析排程、瓶颈与异常。")
             return " ".join(parts)
 
-        parts = [f"Latest scan for line {line_id} is ready."]
+        parts = [f"Latest scan for {scope} is ready."]
         if kpi0:
             parts.append(f"Plan attainment is {kpi0.value}.")
         if cap and cap.gauge_value is not None:

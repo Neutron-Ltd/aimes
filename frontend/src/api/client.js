@@ -5,9 +5,6 @@ export const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/,
 export const DEFAULT_WORKSHOP_ID =
   import.meta.env.VITE_DEFAULT_WORKSHOP_ID ?? 'WS-001'
 
-export const DEFAULT_LINE_ID =
-  import.meta.env.VITE_DEFAULT_LINE_ID ?? 'FDQ-SMT-3'
-
 export const DEFAULT_WH_CODE = import.meta.env.VITE_DEFAULT_WH_CODE ?? ''
 
 export class ApiError extends Error {

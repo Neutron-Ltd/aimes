@@ -3,41 +3,56 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from typing import Optional
 
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.db import get_session
 from models.intents.production import CapacityForecastParams
+from mcp_tools.base import optional_session
 
 
-async def forecast_capacity(params: CapacityForecastParams) -> dict[str, float | int]:
-    session = await get_session()
-    try:
+async def forecast_capacity(
+    params: CapacityForecastParams,
+    *,
+    session: Optional[AsyncSession] = None,
+) -> dict[str, float | int]:
+    async with optional_session(session) as db:
         end = datetime.now()
         start = end - timedelta(days=30)
-        sql = text(
-            """
-            SELECT SUM(COALESCE(eq.finish_qty, 0)) AS total_qty,
-                   COUNT(DISTINCT date_trunc('day', eq.create_time)) AS active_days
-            FROM n2admin.t_smt_program_consumption_record eq
-            WHERE eq.device_sn IN (
-                SELECT device_sn FROM n2admin.t_co_device
-                WHERE cd_location = :line_id
+        if params.line_id:
+            sql = text(
+                """
+                SELECT SUM(COALESCE(eq.finish_qty, 0)) AS total_qty,
+                       COUNT(DISTINCT date_trunc('day', eq.create_time)) AS active_days
+                FROM n2admin.t_smt_program_consumption_record eq
+                WHERE eq.device_sn IN (
+                    SELECT device_sn FROM n2admin.t_co_device
+                    WHERE cd_location = :line_id
+                )
+                  AND eq.create_time BETWEEN :start_date AND :end_date
+                """
             )
-              AND eq.create_time BETWEEN :start_date AND :end_date
-            """
-        )
-        result = await session.execute(
-            sql,
-            {
+            bind = {
                 "line_id": params.line_id,
                 "start_date": start,
                 "end_date": end,
-            },
-        )
+            }
+        else:
+            sql = text(
+                """
+                SELECT SUM(COALESCE(eq.finish_qty, 0)) AS total_qty,
+                       COUNT(DISTINCT date_trunc('day', eq.create_time)) AS active_days
+                FROM n2admin.t_smt_program_consumption_record eq
+                WHERE eq.create_time BETWEEN :start_date AND :end_date
+                """
+            )
+            bind = {
+                "start_date": start,
+                "end_date": end,
+            }
+        result = await db.execute(sql, bind)
         row = result.mappings().first() or {}
-    finally:
-        await session.close()
 
     total_qty = float(row.get("total_qty") or 0)
     active_days = max(int(row.get("active_days") or 1), 1)

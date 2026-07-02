@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections import defaultdict
 from datetime import datetime
 from typing import Any, Optional
 
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.dashboard.base import (
     bucket_label,
@@ -19,7 +19,6 @@ from core.dashboard.base import (
     resolve_date_range,
     tool_data,
 )
-from core.db import get_session
 from models.dashboard import (
     AssistantDashboardResponse,
     DashboardChartSlot,
@@ -40,26 +39,25 @@ def _wh_filter(wh_code: Optional[str], alias: str = "rd") -> tuple[str, dict[str
 
 
 async def _fetch_receive_docs(
-    wh_code: Optional[str], start: datetime, end: datetime
+    session: AsyncSession,
+    wh_code: Optional[str],
+    start: datetime,
+    end: datetime,
 ) -> list[dict[str, Any]]:
-    session = await get_session()
-    try:
-        wh_sql, wh_bind = _wh_filter(wh_code, "rd")
-        sql = text(
-            f"""
-            SELECT rd.supplier_code, rd.plan_receive_date, rd.receive_date
-            FROM n2admin.t_wms_receive_doc rd
-            WHERE rd.receive_date BETWEEN :start_date AND :end_date
-              AND rd.plan_receive_date IS NOT NULL
-              AND rd.receive_date IS NOT NULL
-              AND rd.supplier_code IS NOT NULL
-            {wh_sql}
-            """
-        )
-        bind = {"start_date": start, "end_date": end, **wh_bind}
-        rows = (await session.execute(sql, bind)).mappings().all()
-    finally:
-        await session.close()
+    wh_sql, wh_bind = _wh_filter(wh_code, "rd")
+    sql = text(
+        f"""
+        SELECT rd.supplier_code, rd.plan_receive_date, rd.receive_date
+        FROM n2admin.t_wms_receive_doc rd
+        WHERE rd.receive_date BETWEEN :start_date AND :end_date
+          AND rd.plan_receive_date IS NOT NULL
+          AND rd.receive_date IS NOT NULL
+          AND rd.supplier_code IS NOT NULL
+        {wh_sql}
+        """
+    )
+    bind = {"start_date": start, "end_date": end, **wh_bind}
+    rows = (await session.execute(sql, bind)).mappings().all()
     return [dict(r) for r in rows]
 
 
@@ -122,49 +120,50 @@ def _stability_from_receive_docs(rows: list[dict[str, Any]]) -> Optional[float]:
 
 
 async def _fetch_receive_summary(
-    wh_code: Optional[str], start: datetime, end: datetime
+    session: AsyncSession,
+    wh_code: Optional[str],
+    start: datetime,
+    end: datetime,
 ) -> dict[str, Any]:
-    rows = await _fetch_receive_docs(wh_code, start, end)
+    rows = await _fetch_receive_docs(session, wh_code, start, end)
     return _summarize_receive_docs(rows)
 
 
 async def _fetch_spend_totals(
-    wh_code: Optional[str], start: datetime, end: datetime
+    session: AsyncSession,
+    wh_code: Optional[str],
+    start: datetime,
+    end: datetime,
 ) -> float:
-    session = await get_session()
-    try:
-        wh_sql, wh_bind = _wh_filter(wh_code, "rd")
-        sql = text(
-            f"""
-            SELECT COALESCE(
-                SUM(COALESCE(ri.receive_qty, 0) * COALESCE(ci.single_price, 0)),
-                0
-            ) AS spend
-            FROM n2admin.t_wms_receive_item ri
-            JOIN n2admin.t_wms_receive_doc rd ON ri.doc_no = rd.doc_no
-            LEFT JOIN n2admin.t_co_item ci ON ri.item_code = ci.item_code
-            WHERE rd.receive_date BETWEEN :start_date AND :end_date
-            {wh_sql}
-            """
-        )
-        bind = {"start_date": start, "end_date": end, **wh_bind}
-        row = (await session.execute(sql, bind)).mappings().first()
-    finally:
-        await session.close()
+    wh_sql, wh_bind = _wh_filter(wh_code, "rd")
+    sql = text(
+        f"""
+        SELECT COALESCE(
+            SUM(COALESCE(ri.receive_qty, 0) * COALESCE(ci.single_price, 0)),
+            0
+        ) AS spend
+        FROM n2admin.t_wms_receive_item ri
+        JOIN n2admin.t_wms_receive_doc rd ON ri.doc_no = rd.doc_no
+        LEFT JOIN n2admin.t_co_item ci ON ri.item_code = ci.item_code
+        WHERE rd.receive_date BETWEEN :start_date AND :end_date
+        {wh_sql}
+        """
+    )
+    bind = {"start_date": start, "end_date": end, **wh_bind}
+    row = (await session.execute(sql, bind)).mappings().first()
     return float(row.get("spend") or 0) if row else 0.0
 
 
 async def _fetch_spend_comparison(
+    session: AsyncSession,
     wh_code: Optional[str],
     start: datetime,
     end: datetime,
     prev_start: datetime,
     prev_end: datetime,
 ) -> dict[str, Any]:
-    current, previous = await asyncio.gather(
-        _fetch_spend_totals(wh_code, start, end),
-        _fetch_spend_totals(wh_code, prev_start, prev_end),
-    )
+    current = await _fetch_spend_totals(session, wh_code, start, end)
+    previous = await _fetch_spend_totals(session, wh_code, prev_start, prev_end)
     savings_pct = None
     if previous > 0:
         savings_pct = ((previous - current) / previous) * 100.0
@@ -180,31 +179,30 @@ async def _fetch_spend_comparison(
 
 
 async def _fetch_daily_spend(
-    wh_code: Optional[str], start: datetime, end: datetime
+    session: AsyncSession,
+    wh_code: Optional[str],
+    start: datetime,
+    end: datetime,
 ) -> tuple[list[str], list[float]]:
-    session = await get_session()
-    try:
-        wh_sql, wh_bind = _wh_filter(wh_code, "rd")
-        sql = text(
-            f"""
-            SELECT DATE(rd.receive_date) AS bucket,
-                   COALESCE(
-                       SUM(COALESCE(ri.receive_qty, 0) * COALESCE(ci.single_price, 0)),
-                       0
-                   ) AS spend
-            FROM n2admin.t_wms_receive_item ri
-            JOIN n2admin.t_wms_receive_doc rd ON ri.doc_no = rd.doc_no
-            LEFT JOIN n2admin.t_co_item ci ON ri.item_code = ci.item_code
-            WHERE rd.receive_date BETWEEN :start_date AND :end_date
-            {wh_sql}
-            GROUP BY DATE(rd.receive_date)
-            ORDER BY bucket
-            """
-        )
-        bind = {"start_date": start, "end_date": end, **wh_bind}
-        rows = (await session.execute(sql, bind)).mappings().all()
-    finally:
-        await session.close()
+    wh_sql, wh_bind = _wh_filter(wh_code, "rd")
+    sql = text(
+        f"""
+        SELECT DATE(rd.receive_date) AS bucket,
+               COALESCE(
+                   SUM(COALESCE(ri.receive_qty, 0) * COALESCE(ci.single_price, 0)),
+                   0
+               ) AS spend
+        FROM n2admin.t_wms_receive_item ri
+        JOIN n2admin.t_wms_receive_doc rd ON ri.doc_no = rd.doc_no
+        LEFT JOIN n2admin.t_co_item ci ON ri.item_code = ci.item_code
+        WHERE rd.receive_date BETWEEN :start_date AND :end_date
+        {wh_sql}
+        GROUP BY DATE(rd.receive_date)
+        ORDER BY bucket
+        """
+    )
+    bind = {"start_date": start, "end_date": end, **wh_bind}
+    rows = (await session.execute(sql, bind)).mappings().all()
 
     labels: list[str] = []
     series: list[float] = []
@@ -218,36 +216,33 @@ async def _fetch_daily_spend(
 
 
 async def _fetch_supplier_scores(
+    session: AsyncSession,
     supplier_stats: dict[str, dict[str, int]],
 ) -> tuple[list[str], list[float]]:
     if not supplier_stats:
         return [], []
 
-    session = await get_session()
-    try:
-        codes = list(supplier_stats.keys())[:20]
-        placeholders = ", ".join(f":s{i}" for i in range(len(codes)))
-        bind = {f"s{i}": code for i, code in enumerate(codes)}
-        name_map: dict[str, str] = {}
-        if codes:
-            sql = text(
-                f"""
-                SELECT supplier_code, supplier_name, supplier_shortname
-                FROM n2admin.t_co_supplier
-                WHERE supplier_code IN ({placeholders})
-                """
+    codes = list(supplier_stats.keys())
+    placeholders = ", ".join(f":s{i}" for i in range(len(codes)))
+    bind = {f"s{i}": code for i, code in enumerate(codes)}
+    name_map: dict[str, str] = {}
+    if codes:
+        sql = text(
+            f"""
+            SELECT supplier_code, supplier_name, supplier_shortname
+            FROM n2admin.t_co_supplier
+            WHERE supplier_code IN ({placeholders})
+            """
+        )
+        rows = (await session.execute(sql, bind)).mappings().all()
+        for row in rows:
+            code = str(row.get("supplier_code") or "")
+            name = (
+                row.get("supplier_shortname")
+                or row.get("supplier_name")
+                or code
             )
-            rows = (await session.execute(sql, bind)).mappings().all()
-            for row in rows:
-                code = str(row.get("supplier_code") or "")
-                name = (
-                    row.get("supplier_shortname")
-                    or row.get("supplier_name")
-                    or code
-                )
-                name_map[code] = str(name)[:12]
-    finally:
-        await session.close()
+            name_map[code] = str(name)[:12]
 
     scored: list[tuple[str, float, int]] = []
     for code, data in supplier_stats.items():
@@ -258,39 +253,38 @@ async def _fetch_supplier_scores(
         scored.append((code, round(otd, 1), total))
 
     scored.sort(key=lambda x: x[2], reverse=True)
-    top = scored[:5]
-    labels = [name_map.get(code, code[:12]) for code, _, _ in top]
-    series = [score for _, score, _ in top]
+    labels = [name_map.get(code, code[:12]) for code, _, _ in scored]
+    series = [score for _, score, _ in scored]
     return labels, series
 
 
 async def _fetch_lead_time_by_abc(
-    wh_code: Optional[str], start: datetime, end: datetime, locale: str
+    session: AsyncSession,
+    wh_code: Optional[str],
+    start: datetime,
+    end: datetime,
+    locale: str,
 ) -> tuple[list[str], list[float]]:
-    session = await get_session()
-    try:
-        wh_sql, wh_bind = _wh_filter(wh_code, "rd")
-        sql = text(
-            f"""
-            SELECT ci.abc_type,
-                   AVG(EXTRACT(EPOCH FROM (rd.receive_date - rd.plan_receive_date)) / 86400.0)
-                       AS avg_lead_days
-            FROM n2admin.t_wms_receive_doc rd
-            JOIN n2admin.t_wms_receive_item ri ON ri.doc_no = rd.doc_no
-            LEFT JOIN n2admin.t_co_item ci ON ri.item_code = ci.item_code
-            WHERE rd.receive_date BETWEEN :start_date AND :end_date
-              AND rd.plan_receive_date IS NOT NULL
-              AND rd.receive_date IS NOT NULL
-              AND ci.abc_type IS NOT NULL
-            {wh_sql}
-            GROUP BY ci.abc_type
-            ORDER BY ci.abc_type
-            """
-        )
-        bind = {"start_date": start, "end_date": end, **wh_bind}
-        rows = (await session.execute(sql, bind)).mappings().all()
-    finally:
-        await session.close()
+    wh_sql, wh_bind = _wh_filter(wh_code, "rd")
+    sql = text(
+        f"""
+        SELECT ci.abc_type,
+               AVG(EXTRACT(EPOCH FROM (rd.receive_date - rd.plan_receive_date)) / 86400.0)
+                   AS avg_lead_days
+        FROM n2admin.t_wms_receive_doc rd
+        JOIN n2admin.t_wms_receive_item ri ON ri.doc_no = rd.doc_no
+        LEFT JOIN n2admin.t_co_item ci ON ri.item_code = ci.item_code
+        WHERE rd.receive_date BETWEEN :start_date AND :end_date
+          AND rd.plan_receive_date IS NOT NULL
+          AND rd.receive_date IS NOT NULL
+          AND ci.abc_type IS NOT NULL
+        {wh_sql}
+        GROUP BY ci.abc_type
+        ORDER BY ci.abc_type
+        """
+    )
+    bind = {"start_date": start, "end_date": end, **wh_bind}
+    rows = (await session.execute(sql, bind)).mappings().all()
 
     zh = locale.startswith("zh")
     labels: list[str] = []
@@ -307,29 +301,27 @@ async def _fetch_lead_time_by_abc(
     return labels, series
 
 
-async def _fetch_kit_rate(wh_code: Optional[str]) -> Optional[float]:
-    session = await get_session()
-    try:
-        filters = ["ci.min_stock > 0"]
-        bind: dict[str, Any] = {}
-        if wh_code:
-            filters.append("s.wh_code = :wh_code")
-            bind["wh_code"] = wh_code
+async def _fetch_kit_rate(
+    session: AsyncSession, wh_code: Optional[str]
+) -> Optional[float]:
+    filters = ["ci.min_stock > 0"]
+    bind: dict[str, Any] = {}
+    if wh_code:
+        filters.append("s.wh_code = :wh_code")
+        bind["wh_code"] = wh_code
 
-        sql = text(
-            f"""
-            SELECT s.item_code,
-                   SUM(COALESCE(s.item_qty, 0)) AS stock_qty,
-                   MAX(COALESCE(ci.min_stock, 0)) AS min_stock
-            FROM n2admin.t_wms_stock_info s
-            JOIN n2admin.t_co_item ci ON s.item_code = ci.item_code
-            WHERE {" AND ".join(filters)}
-            GROUP BY s.item_code
-            """
-        )
-        rows = (await session.execute(sql, bind)).mappings().all()
-    finally:
-        await session.close()
+    sql = text(
+        f"""
+        SELECT s.item_code,
+               SUM(COALESCE(s.item_qty, 0)) AS stock_qty,
+               MAX(COALESCE(ci.min_stock, 0)) AS min_stock
+        FROM n2admin.t_wms_stock_info s
+        JOIN n2admin.t_co_item ci ON s.item_code = ci.item_code
+        WHERE {" AND ".join(filters)}
+        GROUP BY s.item_code
+        """
+    )
+    rows = (await session.execute(sql, bind)).mappings().all()
 
     if not rows:
         return None
@@ -351,30 +343,29 @@ class ProcurementDashboardBuilder:
         locale: str,
         lookback_days: int,
         context: MCPContext,
+        *,
+        session: AsyncSession,
     ) -> AssistantDashboardResponse:
         start, end = resolve_date_range(lookback_days)
         prev_start, prev_end = previous_period(start, end)
 
-        receive_rows = await _fetch_receive_docs(wh_code, start, end)
+        receive_rows = await _fetch_receive_docs(session, wh_code, start, end)
         receive_summary = _summarize_receive_docs(receive_rows)
         stability = _stability_from_receive_docs(receive_rows)
 
-        (
-            spend_comparison,
-            daily_spend,
-            supplier_scores,
-            lead_time_abc,
-            kit_rate,
-            inventory_result,
-        ) = await asyncio.gather(
-            _fetch_spend_comparison(wh_code, start, end, prev_start, prev_end),
-            _fetch_daily_spend(wh_code, start, end),
-            _fetch_supplier_scores(receive_summary.get("supplier_stats") or {}),
-            _fetch_lead_time_by_abc(wh_code, start, end, locale),
-            _fetch_kit_rate(wh_code),
-            get_inventory_status_tool.run(
-                InventoryStatusParams(wh_code=wh_code), context
-            ),
+        spend_comparison = await _fetch_spend_comparison(
+            session, wh_code, start, end, prev_start, prev_end
+        )
+        daily_spend = await _fetch_daily_spend(session, wh_code, start, end)
+        supplier_scores = await _fetch_supplier_scores(
+            session, receive_summary.get("supplier_stats") or {}
+        )
+        lead_time_abc = await _fetch_lead_time_by_abc(
+            session, wh_code, start, end, locale
+        )
+        kit_rate = await _fetch_kit_rate(session, wh_code)
+        inventory_result = await get_inventory_status_tool.run(
+            InventoryStatusParams(wh_code=wh_code), context, session=session
         )
 
         daily_labels, daily_series = daily_spend

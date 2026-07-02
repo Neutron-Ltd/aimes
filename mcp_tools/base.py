@@ -8,10 +8,13 @@ invokes with structured parameters — never free-form SQL.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Generic, TypeVar
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator, Generic, TypeVar
 
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.db import get_session
 from core.logging import get_logger
 from models.schemas import MCPContext
 
@@ -19,6 +22,21 @@ logger = get_logger(__name__)
 
 TParams = TypeVar("TParams", bound=BaseModel)
 TResult = TypeVar("TResult", bound=BaseModel)
+
+
+@asynccontextmanager
+async def optional_session(
+    session: AsyncSession | None = None,
+) -> AsyncIterator[AsyncSession]:
+    """Yield an existing session or acquire and close a standalone one."""
+    if session is not None:
+        yield session
+        return
+    owned = await get_session()
+    try:
+        yield owned
+    finally:
+        await owned.close()
 
 
 class MCPToolResult(BaseModel):
@@ -44,18 +62,31 @@ class BaseMCPTool(ABC, Generic[TParams, TResult]):
     description: str
 
     @abstractmethod
-    async def execute(self, params: TParams, context: MCPContext) -> TResult:
+    async def execute(
+        self,
+        params: TParams,
+        context: MCPContext,
+        *,
+        session: AsyncSession | None = None,
+    ) -> TResult:
         """Run the tool with validated parameters."""
         ...
 
-    async def run(self, params: TParams, context: MCPContext) -> MCPToolResult:
+    async def run(
+        self,
+        params: TParams,
+        context: MCPContext,
+        *,
+        session: AsyncSession | None = None,
+    ) -> MCPToolResult:
         """
         Public entry point — validates, executes, and wraps the result.
 
         The orchestrator calls run() after mapping IntentSchema → tool params.
+        Dashboard builders may pass a shared session to cap connection use.
         """
         try:
-            result = await self.execute(params, context)
+            result = await self.execute(params, context, session=session)
             logger.info("MCP tool '%s' completed", self.name)
             return MCPToolResult(
                 tool_name=self.name,
