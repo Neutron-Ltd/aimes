@@ -9,18 +9,6 @@ const DOMAIN_PREFIX = {
   procurement: '【AI采购助手】'
 }
 
-/** Strip common Markdown markers for plain-text chat display. */
-function plainTextFromMarkdown(text) {
-  if (!text) return ''
-  return text
-    .replace(/^#{1,6}\s+/gm, '')
-    .replace(/\*\*(.*?)\*\*/g, '$1')
-    .replace(/\*(.*?)\*/g, '$1')
-    .replace(/`([^`]+)`/g, '$1')
-    .replace(/^\s*[-*+]\s+/gm, '• ')
-    .trim()
-}
-
 function wrapQuery(assistantKey, message) {
   const prefix = DOMAIN_PREFIX[assistantKey] ?? ''
   return prefix ? `${prefix} ${message}` : message
@@ -45,7 +33,7 @@ export async function sendIntegratedChat(assistantKey, message, locale) {
     })
 
     const reply =
-      plainTextFromMarkdown(response.message) ||
+      response.message?.trim() ||
       (response.result ? JSON.stringify(response.result, null, 2) : '')
 
     if (!reply) {

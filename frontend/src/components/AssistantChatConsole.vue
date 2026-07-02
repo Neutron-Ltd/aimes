@@ -53,7 +53,12 @@
               :class="`${message.role}-message`"
             >
               <strong v-if="message.role === 'assistant'">{{ title }}</strong>
-              <span>{{ message.content }}</span>
+              <div
+                v-if="message.role === 'assistant'"
+                class="chat-markdown"
+                v-html="renderMarkdown(message.content)"
+              />
+              <span v-else>{{ message.content }}</span>
             </div>
 
             <div v-if="thinking" class="chat-message assistant-message thinking-message">
@@ -110,6 +115,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { DArrowLeft, DArrowRight } from '@element-plus/icons-vue'
 import { useAssistantChat } from '../composables/useAssistantChat'
 import { useLocale } from '../composables/useLocale'
+import { renderMarkdown } from '../utils/markdown'
 
 const props = defineProps({
   /** 助手标识，对接后端时使用：production / warehouse / quality / equipment / procurement */
