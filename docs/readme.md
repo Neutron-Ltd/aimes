@@ -1,451 +1,394 @@
-# NEUTRON MES AI Assistant — Backend
+# MES AI — Module Feature Catalog / 模块功能对照
 
-Enterprise Manufacturing Execution System (MES) AI Assistant backend for the **NEUTRON** team. The system accepts natural-language queries, extracts structured intent via **Alibaba Cloud Bailian (DashScope)**, and dispatches typed parameters to predefined **Model Context Protocol (MCP) tools** that query the MES PostgreSQL database.
+Feature catalog for the **宁波睿创 AI 工业大脑** frontend and its backend integrations. Each of the five assistant modules is documented with dashboard charts (tables, fetch logic, status) and chat (MCP tools, tables, routing, report format).
 
-**Stack:** Python 3.10+, FastAPI, Pydantic v2, SQLAlchemy 2.0 (async), asyncpg, dashscope (Bailian SDK).
+**Legend / 图例**
 
-**Current version:** `0.3.0` — RAG pipeline, 18 MCP tools (Production/Quality/Warehouse), voice/export/cross-module utilities, global DB access (no workshop row-level filtering).
+| Mark | Dashboard meaning | Chat meaning |
+|------|-------------------|--------------|
+| ✅ | Live MES data (`source: "live"`) | Dedicated MCP intents registered in `orchestrator/tool_registry.py` |
+| ❌ | Static mock series (`source: "fallback"`) | No dedicated MCP module; reuses other intents or UNKNOWN greeting only |
 
-**Debugging reference:** [docs/mesai-mcp-1.1.md](docs/mesai-mcp-1.1.md) (tool SQL, schemas, known mismatches) · [docs/mesai-query-1.1.md](docs/mesai-query-1.1.md) (real test IDs and date ranges)
-
----
-
-## Architectural Constraints (Audit Checklist)
-
-| Constraint | Status | Implementation |
-|---|---|---|
-| **No Text-to-SQL** | Enforced | LLM extracts parameters only. MCP tools run predefined `sqlalchemy.text()` queries. |
-| **Intent routing (Feature 1.2)** | Done | `parse_intent()` → Bailian `dashscope.Application.call` → `IntentSchema` |
-| **API-first testing** | Done | Swagger UI at `/docs` (root `/` redirects here), ReDoc at `/redoc` |
-| **Param validation** | Done | `orchestrator/param_validation.py` blocks dispatch when required entities are missing (no dummy `L-01` fallbacks) |
-| **Math safeguard (Feature 5.2)** | Done | `core/math_safeguard.py` — std dev and growth rates computed in Python |
-| **Global data access** | Done | No `data_auth` / workshop filtering in MCP SQL; queries match on line, device, dates, product codes only |
+Chat integration status in this document reflects **backend MCP wiring only** (not the frontend `VITE_INTEGRATED_ASSISTANTS` deployment gate).
 
 ---
 
-## High-Level Request Flow
+## Frontend layout / 前端布局
+
+The SPA (`mes-ai-client`) uses Vue 3 + Element Plus + ECharts. Every assistant page shares the same shell and dashboard layout.
 
 ```mermaid
-sequenceDiagram
-    participant User as Swagger_UI
-    participant API as POST_/api/v1/query
-    participant MW as RequestContextMiddleware
-    participant Bailian as dashscope.Application
-    participant Router as route_and_execute
-    participant Validate as param_validation
-    participant MCP as MCP_tools
-    participant DB as PostgreSQL
-
-    User->>API: query JSON body
-    API->>MW: empty MCPContext
-    MW->>Router: route_and_execute
-    Router->>Bailian: asyncio.to_thread Application.call
-    Bailian-->>Router: JSON intent params
-    Router->>Validate: required entities
-    alt missing line_id etc
-        Validate-->>User: message only (no DB call)
-    else ok
-        Validate->>MCP: tool.run params
-        MCP->>DB: parameterized SQL (no data_auth filter)
-        DB-->>MCP: raw rows
-        MCP-->>User: OrchestratorResponse
-    end
+flowchart TB
+  Home[Index.vue] --> Assistant["assistants/*/index.vue"]
+  Assistant --> Layout[AssistantDashboardLayout]
+  Layout --> KPIs["KPI cards x3"]
+  Layout --> Mosaic["AssistantChartMosaic x6"]
+  Layout --> Insight[Insight card]
+  Layout --> Chat[AssistantChatConsole]
+  Mosaic --> API1["GET /api/v1/assistants/{module}/dashboard"]
+  Chat --> API2["POST /api/v1/query"]
 ```
 
-1. User sends `POST /api/v1/query` with a natural-language `query` (no auth headers required).
-2. `RBACMiddleware` injects an empty `MCPContext` placeholder (headers are ignored for data scoping).
-3. `parse_intent(query, context)` calls Bailian asynchronously and returns `IntentSchema`.
-4. `validate_intent_params()` returns a user-facing message if required fields (e.g. `line_id`, `device_sn`) are missing.
-5. `route_and_execute()` maps intent → Pydantic params via `param_mappers.py` and runs the matching MCP tool.
-6. MCP tool queries PostgreSQL globally, computes statistics in Python, returns JSON.
+| Route | Module | Scope param |
+|-------|--------|-------------|
+| `/` | Home | — |
+| `/assistant/production` | Production | `line_id` (default `FDQ-SMT-3`) |
+| `/assistant/warehouse` | Warehouse | `wh_code` (optional) |
+| `/assistant/quality` | Quality | `line_id` (optional) |
+| `/assistant/equipment` | Equipment | `line_id` (optional) |
+| `/assistant/procurement` | Procurement | `wh_code` (optional) |
 
-**Intent routing map (v0.3 — 18 tools):**
+**Shared components**
 
-| Module | `IntentType` examples | MCP Tool |
-|---|---|---|
-| Production | `yield_aggregation`, `production_root_cause`, `production_product_yield` | `get_yield_aggregation`, `get_production_root_cause`, … |
-| Quality | `quality_defect_analysis`, `quality_error_prevention` | `get_quality_defect_aggregation`, `check_error_prevention`, … |
-| Warehouse | `warehouse_inventory_monitor`, `warehouse_trace_forward` | `get_inventory_status`, `trace_material_forward`, … |
-| System | `cross_module_analysis`, `export_report` | `cross_module_analysis`, `POST /export` |
+| Component | Role |
+|-----------|------|
+| `AppShell.vue` | Global shell: background, header, router outlet |
+| `AssistantDashboardLayout.vue` | KPI grid + chart mosaic + insight + chat |
+| `AssistantChartMosaic.vue` | Six ECharts containers in bento grid |
+| `AssistantChatConsole.vue` | Collapsible AI chat panel |
 
-RAG context is attached to `metadata.rag_context` for anomaly/root-cause intents when `enrich_response=true` (global vector search, not workshop-scoped).
+**Shared data flow**
 
----
-
-## Quick Start
-
-```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-# Edit .env — see Environment Variables below
-uvicorn main:app --reload
-```
-
-Open **http://127.0.0.1:8000/** (redirects to Swagger) or **http://127.0.0.1:8000/docs**.
-
-### Environment Variables (`.env`)
-
-| Variable | Required | Description |
-|---|---|---|
-| `DATABASE_URL` | Yes | Async PostgreSQL DSN: `postgresql+asyncpg://user:pass@host:5432/mes_db` |
-| `DASHSCOPE_API_KEY` | Yes* | Alibaba DashScope API key for Bailian intent extraction |
-| `BAILIAN_APP_ID` | Yes* | Bailian Application ID from Model Studio |
-| `DB_POOL_SIZE` | No | Connection pool size (default: `5`) |
-| `DEBUG` | No | Enable SQL echo, Bailian raw response logging, and tool result debug logs |
-| `RAG_BACKEND` | No | `pgvector` \| `chroma` \| file fallback (default: `chroma` → file) |
-| `RAG_EMBEDDING_MODEL` | No | DashScope embedding model (default: `text-embedding-v2`) |
-| `CHROMA_PERSIST_DIR` | No | Local vector store path (default: `./data/chroma`) |
-| `VOICE_MOCK` | No | Return mock transcript when `true` (default: `true`) |
-
-\*Without Bailian credentials the app still starts; queries return `intent: unknown` with a logged warning.
-
-**Common startup error:** If `DATABASE_URL` still contains the placeholder `host:port` (copied literally from an old template), SQLAlchemy will fail with `invalid literal for int() with base 10: 'port'`. Replace with a real hostname and numeric port (e.g. `5432`).
+- **Dashboard:** `useIntegratedAssistantPage.js` → `GET /api/v1/assistants/{module}/dashboard` → SQLite cache (server) → `core/dashboard/{module}.py` → MCP tools + SQL → frontend merges live slots via `adapters/chartSlots.js` (only when `source === "live"`).
+- **Chat:** `useAssistantChat.js` → `adapters/chat.js` → `POST /api/v1/query` → Bailian intent parse → MCP tool → Bailian synthesis → Markdown reply (or deterministic fallback template).
 
 ---
 
-## Directory Structure
+## Global frontend features / 全局功能
 
-```
-mesai/
-├── main.py
-├── api/routes.py               # query, voice, rag/ingest, export
-├── core/
-│   ├── rag/                    # store, ingest, retriever
-│   ├── analytics/              # root_cause, scheduling, capacity
-│   ├── export/                 # excel, pdf
-│   ├── voice/                  # transcribe
-│   └── security.py             # request context middleware (no RBAC enforcement)
-├── models/intents/             # production, quality, warehouse, system
-├── mcp_tools/
-│   ├── production_tools.py     # 6 production tools
-│   ├── production_engines.py   # root cause, scheduling, capacity
-│   ├── quality_tools.py        # 4 quality tools
-│   └── warehouse_tools.py      # 5 warehouse tools
-├── orchestrator/
-│   ├── router.py               # slim dispatcher
-│   ├── tool_registry.py        # intent → tool map (18 tools)
-│   ├── param_mappers.py        # IntentSchema → tool params
-│   ├── param_validation.py     # required-entity checks before DB
-│   ├── intent_prompt.py
-│   ├── intent_utils.py         # parse_intent, Bailian call
-│   └── cross_module.py
-└── db/migrations/001_rag_pgvector.sql
-```
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Home page (5 assistant cards) | ✅ | `frontend/src/views/Index.vue` |
+| i18n (Chinese / English) | ✅ | `useLocale.js` + `messages.js`; persisted in `localStorage` |
+| Dashboard API (all 5 modules) | ✅ | Always fetched via `useIntegratedAssistantPage.js` on mount / locale change |
+| Dashboard SQLite cache | ✅ | Backend only; check `X-Dashboard-Cache: hit \| stale \| miss` |
+| Chart loading UX | ✅ | Plain "Loading" text in chart boxes; staggered ECharts init |
+| Live chat API (backend) | ✅ | Orchestrator + MCP fully wired for production, warehouse, quality |
+| Live chat API (frontend gate) | Config | `VITE_INTEGRATED_ASSISTANTS` (default: `production` only); not counted in ✅/❌ below |
+| Chat history persistence | ❌ | Backend SQLite exists; frontend keeps messages in component state only |
+| Partial dashboard flag | ✅ | API sets `partial: true` when any slot falls back; UI does not surface it yet |
 
 ---
 
-## File-by-File Reference
+## Report generation (all modules) / 报告生成
 
-### `main.py` — Application Entry Point
+Reports are **not** a fixed PDF template. Content is **dynamic** based on the user query and live MCP tool results.
 
-| Symbol | Purpose |
-|---|---|
-| `lifespan()` | `setup_logging()` → `init_db()` on startup; `close_db()` on shutdown |
-| `create_app()` | FastAPI app + request context middleware + API router + `/` → `/docs` redirect |
-| `app` | ASGI instance for uvicorn |
+| Path | Format |
+|------|--------|
+| **Primary** | **Dynamic AI Markdown** — Bailian second pass (`orchestrator/report_generator.py` → `generate_ai_analysis`) using module persona from `orchestrator/module_personas.py` + tool JSON |
+| **UNKNOWN intent** | **Fixed greeting** — static module greeting + sample prompts from `module_personas.py` (no tool call, no DB query) |
+| **Fallback** | **Deterministic template** — `_fallback_markdown_report()` builds titled sections, metric bullets, and tables from tool JSON when Bailian is unavailable or fails |
+| **Export** | `EXPORT_REPORT` intent wraps the last synthesis (cross-module) |
 
----
-
-### `api/routes.py` — HTTP Endpoints
-
-| Endpoint | Method | Description |
-|---|---|---|
-| `/api/v1/health` | GET | Liveness + version |
-| `/api/v1/query` | POST | NL query → Bailian → validate → MCP tool |
-| `/api/v1/query/voice` | POST | Audio upload → transcribe → query |
-| `/api/v1/rag/ingest` | POST | Ingest SOP/anomaly/solution into RAG (global index) |
-| `/api/v1/export` | POST | Export result as xlsx or pdf |
-
-No headers are required for data access. `X-MES-Workshop-Id` and related headers are accepted by Swagger for compatibility but **do not filter database queries**.
+Structure is guided by persona prompts (e.g. "executive summary → metrics → actions"); wording and numbers change per query and data.
 
 ---
 
-### `core/config.py` — Settings
+## 1. Production / AI生产助手
 
-All settings load from `.env` via Pydantic `BaseSettings`. `get_settings()` is a cached singleton.
+| Item | Value |
+|------|-------|
+| Route | `/assistant/production` |
+| Module key | `production` |
+| Scope | `line_id` (required) |
+| Frontend composable | `useProductionAssistantPage.js` |
+| Chart mock fallback | `views/assistants/production/charts.js` |
+| Backend builder | `core/dashboard/production.py` |
+| Dashboard API | `GET /api/v1/assistants/production/dashboard?line_id=…` |
+| Chat prefix | `【AI生产助手】` |
 
-Key fields: `database_url`, `dashscope_api_key`, `bailian_app_id`, `db_pool_size`, `debug`, `rag_backend`.
+### Dashboard — KPIs
 
----
+| KPI (zh / en) | Tables | Fetch logic | Status |
+|---------------|--------|-------------|--------|
+| 计划达成率 / Plan Attainment | `t_smt_program_consumption_record`, `t_co_device` | `get_yield_aggregation` — equipment achievement rate | ✅ |
+| 设备稼动率 / Equipment Utilization | `t_smt_program_consumption_record`, `t_co_device` | `get_device_production_rate` — avg output per device | ✅ |
+| 在制工单 / WIP Orders | — | No work-order count tool wired | ❌ |
 
-### `core/db.py` — Database Bridge (F0.4)
+### Dashboard — Charts
 
-SQLAlchemy 2.0 async connection pool.
+| # | Chart (zh / en) | Type | Tables | Fetch logic | Status |
+|---|-----------------|------|--------|-------------|--------|
+| 0 | 产线达成趋势 / Line Attainment Trend | line | `t_smt_program_consumption_record`, `t_co_device` | `get_yield_aggregation` — daily achievement breakdown | ✅ |
+| 1 | 工单状态分布 / Work Order Status | bar | — | No work-order status aggregation tool | ❌ |
+| 2 | 产能负荷 / Capacity Load | gauge | `t_smt_program_consumption_record`, `t_co_device`, `t_co_standard_time` | `forecast_capacity_hr` — utilization % vs standard time | ✅ |
+| 3 | 产线负荷对比 / Line Load Comparison | bar | `t_smt_program_consumption_record`, `t_co_device` | `get_device_production_rate` — top 5 devices by avg rate | ✅ |
+| 4 | 不良品分析 / Defect Analysis | line | `t_wip_detail`, `t_co_area` | SQL — monthly sum of `ng_qty + scrap_qty` on line | ✅ |
+| 5 | 异常停机分析 / Downtime Analysis | bar | `t_smt_program_consumption_record`, `t_co_device` | `get_yield_anomalies` — below_standard hourly buckets | ✅ |
 
-| Symbol | Purpose |
-|---|---|
-| `init_db()` | Create engine, run `SELECT 1`. Logs errors for bad URL or unreachable DB; does not crash the app. |
-| `close_db()` | Dispose engine on shutdown |
-| `get_db()` | FastAPI dependency — yields `AsyncSession` per request |
-| `get_session()` | Standalone session for MCP tool execution |
+### Chat integration
 
----
+| Item | Detail |
+|------|--------|
+| MCP module | `mcp_tools/production_tools.py`, `mcp_tools/production_engines.py` |
+| **Integration status** | **✅** — 9 dedicated intents in `orchestrator/tool_registry.py` |
+| NL routing | User question → Bailian intent extraction → production intent → MCP tool → synthesis with production analyst persona |
 
-### `core/security.py` — Request Context
+| Intent / tool | PostgreSQL tables |
+|---------------|-------------------|
+| `get_yield_aggregation` | `t_smt_program_consumption_record`, `t_co_device` |
+| `get_yield_anomalies_and_peaks` | `t_smt_program_consumption_record`, `t_co_device` |
+| `compare_yield_periods` | `t_smt_program_consumption_record`, `t_co_device` |
+| `get_product_yield` | `t_smt_program_consumption_record`, `t_co_device`, `t_co_item` |
+| `get_device_production_rate` | `t_smt_program_consumption_record`, `t_co_device` |
+| `get_standard_time_achievement` | `t_co_standard_time`, `t_smt_program_consumption_record` |
+| `get_production_root_cause` | `t_smt_program_consumption_record`, `t_wip_detail`, `t_co_area` |
+| `optimize_production_schedule` | `t_aps_plan_mo_info`, `t_smt_program_consumption_record` |
+| `forecast_capacity_hr` | `t_smt_program_consumption_record`, `t_co_device`, `t_co_standard_time` |
 
-`RBACMiddleware` injects an empty `MCPContext()` on every request. Workshop and permission headers are not read for query scoping. `get_mes_context(request)` returns the placeholder context for route handlers.
-
----
-
-### `core/math_safeguard.py` — Mathematical Safeguard (Feature 5.2)
-
-| Function | Formula | Used by |
-|---|---|---|
-| `population_std_dev(values)` | σ = √(Σ(x − μ)² / N) | `get_yield_anomalies_and_peaks` (`volatility`) |
-| `period_over_period_growth_rate(current, past)` | ((current − past) / past) × 100 | `compare_yield_periods`, quality effectiveness |
-
----
-
-### `models/schemas.py` — Shared Pydantic Models
-
-| Model / Enum | Purpose |
-|---|---|
-| `IntentType` | All 18+ intents including production, quality, warehouse, system |
-| `BailianIntentExtraction` | Strict Pydantic model for raw Bailian JSON before mapping |
-| `IntentSchema` | Bailian output: intent, dates, line_id, device_sn, yield_type, group_by, metric, etc. |
-| `MCPContext` | Placeholder context (`workshop_id` optional, unused for DB filtering) |
-| `OrchestratorRequest` | `{ "query": "...", "enrich_response": true }` |
-| `OrchestratorResponse` | `{ intent, tool_name, result, message, metadata }` |
-
-Tool param/result models live in `mcp_tools/production_tools.py` and `models/intents/`.
-
----
-
-### `mcp_tools/production_tools.py` — Production MCP Tools
-
-Six tools. All SQL via `sqlalchemy.text()` with bound parameters. **No `data_auth` filters.**
-
-#### Yield table routing
-
-| `yield_type` | Table(s) | Scope filter | Qty | Time column |
-|---|---|---|---|---|
-| `equipment` | `t_smt_program_consumption_record` | `device_sn = :device_sn` **or** `device_sn IN (SELECT … FROM t_co_device WHERE cd_location = :line_id)` | `finish_qty` / `mount_sheet_qty` | `create_time` |
-| `reported` | `t_wip_detail` JOIN `t_co_area` ×2 | `line.area_sn = :line_id` | `pro_qty − ng_qty − scrap_qty` | `COALESCE(in_time, create_time)` |
-
-**Important:** `t_smt_program_consumption_record.area_sn` is often `NULL` in live machine logs — equipment yield must **not** filter on `eq.area_sn`. Use `t_co_device.cd_location` or direct `device_sn`.
-
-**Reported yield join** (workstation → line hierarchy):
-
-```sql
-n2admin.t_wip_detail wd
-JOIN n2admin.t_co_area ws ON wd.work_stationsn = ws.area_sn
-JOIN n2admin.t_co_area line ON ws.parent_sn = line.area_sn
-WHERE line.area_sn = :line_id
-```
-
-#### Yield validation (`param_validation.py`)
-
-| `yield_type` | Required scope |
-|---|---|
-| `reported` | `line_id` |
-| `equipment` | `line_id` **or** `device_sn` |
-
-#### Tools
-
-| Tool | Singleton | Purpose |
-|---|---|---|
-| `get_yield_aggregation` | `get_yield_aggregation_tool` | Sum, average, achievement rate (daily/hourly/total) |
-| `get_yield_anomalies_and_peaks` | `get_yield_anomalies_tool` | Volatility, below-standard, peak hourly |
-| `compare_yield_periods` | `compare_yield_periods_tool` | Period-over-period totals + growth rate |
-| `get_product_yield` | `get_product_yield_tool` | Product yield per line + `t_co_item` metadata |
-| `get_device_production_rate` | `get_device_production_rate_tool` | Avg rate via `t_co_device` join |
-| `get_standard_time_achievement` | `get_standard_time_achievement_tool` | Actual vs `t_co_standard_time` goal |
-
-Achievement rates and growth rates are computed in Python (`_compute_metric`, `math_safeguard`), not by the LLM.
+**Report generation:** Dynamic AI Markdown (production planning analyst persona). RAG enrichment for `yield_anomalies` and `production_root_cause`. UNKNOWN → fixed production greeting.
 
 ---
 
-### `mcp_tools/production_engines.py` — Analytics Engines
+## 2. Warehouse / AI仓库助手
 
-| Tool | Engine | Notes |
-|---|---|---|
-| `get_production_root_cause` | `core/analytics/root_cause.py` | Uses `wd.operator`; equipment join via `t_co_device` |
-| `optimize_production_schedule` | `core/analytics/scheduling.py` | `t_aps_plan_mo_info` (no `mo.status` column) |
-| `forecast_capacity_hr` | `core/analytics/capacity.py` | Historical throughput via `t_co_device` bridge |
+| Item | Value |
+|------|-------|
+| Route | `/assistant/warehouse` |
+| Module key | `warehouse` |
+| Scope | `wh_code` (optional; empty = all warehouses) |
+| Frontend composable | `useWarehouseAssistantPage.js` |
+| Chart mock fallback | `views/assistants/warehouse/charts.js` |
+| Backend builder | `core/dashboard/warehouse.py` |
+| Dashboard API | `GET /api/v1/assistants/warehouse/dashboard?wh_code=…` |
+| Chat prefix | `【AI仓库助手】` |
 
----
+### Dashboard — KPIs
 
-### `orchestrator/` — Intent Pipeline
+| KPI (zh / en) | Tables | Fetch logic | Status |
+|---------------|--------|-------------|--------|
+| 库存准确率 / Inventory Accuracy | `t_wms_stock_info`, `t_co_item` | SQL `_fetch_stock_summary` — non-low, non-expiring rows / total | ✅ |
+| 周转天数 / Turnover Days | `t_wms_stock_info`, `t_co_item` | Same SQL — avg days since `instock_time` | ✅ |
+| 待拣任务 / Pick Tasks | `t_wms_stock_info`, `t_co_item` | `get_inventory_status` — low-stock count as replenishment proxy | ✅ |
 
-| File | Role |
-|---|---|
-| `intent_utils.py` | `parse_intent()` — async Bailian call, JSON strip, `IntentSchema` mapping |
-| `intent_prompt.py` | Bailian extraction prompt (no workshop/RBAC fields in output) |
-| `param_validation.py` | Per-intent required-field validators; returns message before DB on failure |
-| `param_mappers.py` | `IntentSchema` → tool Pydantic params |
-| `tool_registry.py` | Registers all 18 `IntentType` → tool + mapper + success message |
-| `router.py` | `route_and_execute()` — parse → RAG → validate → dispatch |
-| `cross_module.py` | Parallel production + quality + warehouse snapshot |
+### Dashboard — Charts
 
-**Bailian call pattern:**
+| # | Chart (zh / en) | Type | Tables | Fetch logic | Status |
+|---|-----------------|------|--------|-------------|--------|
+| 0 | 出入库趋势 / Inbound/Outbound Trend | line/bar | — | No inbound/outbound time-series MCP tool | ❌ |
+| 1 | 库存结构 / Inventory Structure | bar | `t_wms_stock_info`, `t_co_item` | SQL `_fetch_stock_summary` — healthy / low / expiring counts | ✅ |
+| 2 | 库位利用率 / Bin Utilization | gauge | `t_wms_area`, `t_wms_stock_info` | SQL `_fetch_bin_utilization` — occupied storage codes / total areas | ✅ |
+| 3 | 呆滞库存分析 / Slow-moving Stock | bar | `t_wms_stock_info` | SQL `_fetch_age_buckets` — age buckets from `instock_time` | ✅ |
+| 4 | 拣货效率趋势 / Picking Efficiency | line | — | No picking-efficiency time series | ❌ |
+| 5 | 收货及时率 / Receiving On-time Rate | gauge | — | No receiving OTD tool in warehouse MCP set | ❌ |
 
-```python
-response = await asyncio.to_thread(
-    dashscope.Application.call,
-    app_id=settings.bailian_app_id,
-    prompt=prompt_text,
-    api_key=settings.dashscope_api_key,
-)
-```
+### Chat integration
 
-Entity IDs (`line_id`, `device_sn`, etc.) come from Bailian extraction only — never invented by the backend.
+| Item | Detail |
+|------|--------|
+| MCP module | `mcp_tools/warehouse_tools.py` |
+| **Integration status** | **✅** — 5 dedicated intents in `orchestrator/tool_registry.py` |
+| NL routing | Warehouse intents: inventory monitor, obsolete profile, inbound/outbound guide, material trace forward/reverse |
 
----
+| Intent / tool | PostgreSQL tables |
+|---------------|-------------------|
+| `get_inventory_status` | `t_wms_stock_info`, `t_co_item` |
+| `guide_inbound_outbound` | `t_wms_stock_info`, `t_wms_area` |
+| `profile_obsolete_inventory` | `t_wms_stock_info`, `t_co_item` |
+| `trace_material_forward` | `t_wms_mid_item`, `t_wms_stock_info` |
+| `trace_product_reverse` | `t_wip_detail`, `t_wms_stock_info` |
 
-## MES Database Reference
-
-- **Database:** `mes_db`
-- **Schema:** `n2admin` (frozen — fixes are application-layer only)
-- **Full export:** `db/schema.sql`
-- **Read-only user:** configured via `DATABASE_URL`
-
-Key tables: `t_smt_program_consumption_record`, `t_wip_detail`, `t_co_area`, `t_co_device`, `t_qm_inspect_info`, `t_wms_stock_info`.
-
-**Real identifiers** (not placeholders like `L-01`): see [docs/mesai-query-1.1.md](docs/mesai-query-1.1.md) — e.g. line `FDQ-SMT-3`, device `BB-SMT-029`, equipment dates `2026-05-09`–`2026-06-21`.
-
----
-
-## Security Model
-
-1. Read-only PostgreSQL user via `DATABASE_URL`
-2. No Text-to-SQL — SQL is hardcoded in MCP tools
-3. **Global query scope** — MCP tools do not filter on `data_auth` or workshop headers
-4. Parameterized queries only (`:named` bind params)
-5. Param validation prevents execution with missing critical entities (no fake default line IDs)
-6. Secrets in `.env` (gitignored); `.env.example` as template
+**Report generation:** Dynamic AI Markdown (WMS operator persona). RAG enrichment for `warehouse_obsolete_profile`. Fallback template renders `low_stock`, `expiring`, `stagnant_items`, trace chains. UNKNOWN → fixed warehouse greeting.
 
 ---
 
-## Dependencies
+## 3. Quality / AI质量助手
 
-| Package | Role |
-|---|---|
-| `fastapi` | Web framework + OpenAPI/Swagger |
-| `uvicorn[standard]` | ASGI server |
-| `pydantic` / `pydantic-settings` | Validation + config |
-| `sqlalchemy[asyncio]` | Async DB |
-| `asyncpg` | PostgreSQL driver |
-| `dashscope==1.20.0` | Alibaba Bailian / DashScope SDK |
-| `pgvector` | PostgreSQL vector extension client |
-| `pandas` / `openpyxl` | Excel export |
-| `reportlab` | PDF export |
-| `python-multipart` | Voice file uploads |
+| Item | Value |
+|------|-------|
+| Route | `/assistant/quality` |
+| Module key | `quality` |
+| Scope | `line_id` (optional) |
+| Frontend composable | `useQualityAssistantPage.js` |
+| Chart mock fallback | `views/assistants/quality/charts.js` |
+| Backend builder | `core/dashboard/quality.py` |
+| Dashboard API | `GET /api/v1/assistants/quality/dashboard?line_id=…` |
+| Chat prefix | `【AI质量助手】` |
 
----
+### Dashboard — KPIs
 
-## Implementation Status
+| KPI (zh / en) | Tables | Fetch logic | Status |
+|---------------|--------|-------------|--------|
+| 一次合格率 / First Pass Yield | `t_qm_inspect_info` | `get_quality_defect_aggregation` — `100% − defect_rate` | ✅ |
+| 异常批次 / Abnormal Lots | `t_qm_problem_report` | SQL `_fetch_problem_summary` — 8D reports in lookback window | ✅ |
+| 闭环率 / Closure Rate | `t_qm_problem_report` | Same SQL — `close_time IS NOT NULL` / total reports | ✅ |
 
-### Phase 1 — Core Orchestration (Complete)
-- [x] Modular FastAPI structure
-- [x] Request context middleware
-- [x] Swagger UI endpoint
+### Dashboard — Charts
 
-### Phase 2 — Production Data Analysis (Complete)
-- [x] Async SQLAlchemy + asyncpg
-- [x] Production MCP tools with table routing
-- [x] `t_wip_detail` ↔ `t_co_area` join for reported yield
-- [x] Mathematical safeguard layer
+| # | Chart (zh / en) | Type | Tables | Fetch logic | Status |
+|---|-----------------|------|--------|-------------|--------|
+| 0 | 不良率趋势 / Defect Rate Trend | line | `t_qm_inspect_info` | SQL `_fetch_daily_defect_rates` — `(error_qty / real_qty) × 100` daily | ✅ |
+| 1 | 缺陷类型排行 / Defect Type Ranking | bar | `t_qm_problem_report`, `t_qm_problem_reason` | `analyze_defect_root_cause` — top root-cause hypotheses | ✅ |
+| 2 | 质量健康度 / Quality Health | gauge | `t_qm_inspect_info` | `get_quality_defect_aggregation` — `100 − defect_rate` | ✅ |
+| 3 | 返修率趋势 / Rework Rate Trend | line | `t_qm_inspect_info` | Same daily defect SQL used as rework proxy | ✅ |
+| 4 | 工序良率对比 / Process Yield | bar | `t_qm_inspect_info` | Defect tool breakdown by `process_code` | ✅ |
+| 5 | 检验及时率 / Inspection On-time | gauge | — | No on-time inspection MCP tool or schedule table | ❌ |
 
-### v0.3 — Full Backend Upgrade (Complete)
-- [x] RAG pipeline (pgvector + file fallback) + `/api/v1/rag/ingest`
-- [x] Tool registry + param mappers + param validation (18 MCP tools)
-- [x] Production extensions (`t_co_item`, `t_co_device`, `t_co_standard_time`) + analytics engines
-- [x] Quality module (4 tools → `t_qm_*`)
-- [x] Warehouse module (5 tools → `t_wms_*`)
-- [x] Voice query, export xlsx/pdf, cross-module analysis
-- [x] Schema/SQL alignment fixes (equipment `t_co_device` bridge, QM 8D joins, warehouse area lookup)
-- [x] Global data access (RBAC row-level filtering removed)
+### Chat integration
 
-### Known Gaps
+| Item | Detail |
+|------|--------|
+| MCP module | `mcp_tools/quality_tools.py` |
+| **Integration status** | **✅** — 4 dedicated intents in `orchestrator/tool_registry.py` |
+| NL routing | Quality intents: defect aggregation, root cause, error prevention, effectiveness verification |
 
-| Item | Status |
-|---|---|
-| `get_standard_time_achievement` | Still filters `eq.area_sn` — often NULL; needs `t_co_device` bridge |
-| `check_error_prevention` | SQL columns don't match physical QM scheme/IPQC schema |
-| `t_co_area` deep hierarchy | One-level `parent_sn` join; may need recursive CTE |
-| Unit tests | No `tests/` directory |
-| Vue.js frontend | API-first via Swagger |
+| Intent / tool | PostgreSQL tables |
+|---------------|-------------------|
+| `get_quality_defect_aggregation` | `t_qm_inspect_info` |
+| `analyze_defect_root_cause` | `t_qm_problem_report`, `t_qm_problem_reason` |
+| `check_error_prevention` | `t_qm_inspect_scheme_info`, `t_qm_ipqc_doc` |
+| `verify_quality_effectiveness` | `t_qm_inspect_info`, `t_qm_problem_report` |
 
-See [docs/mesai-mcp-1.1.md](docs/mesai-mcp-1.1.md) §5 for full mismatch tracking.
+**Report generation:** Dynamic AI Markdown (quality engineer persona). RAG enrichment for `quality_defect_analysis` and `quality_root_cause`. Fallback includes hypotheses, defect rates, before/after effectiveness. UNKNOWN → fixed quality greeting.
 
 ---
 
-## Quick Test Guide
+## 4. Equipment / AI设备助手
 
-### Health check
-```bash
-curl http://127.0.0.1:8000/api/v1/health
-```
+| Item | Value |
+|------|-------|
+| Route | `/assistant/equipment` |
+| Module key | `equipment` |
+| Scope | `line_id` (optional) |
+| Frontend composable | `useEquipmentAssistantPage.js` |
+| Chart mock fallback | `views/assistants/equipment/charts.js` |
+| Backend builder | `core/dashboard/equipment.py` |
+| Dashboard API | `GET /api/v1/assistants/equipment/dashboard?line_id=…` |
+| Chat prefix | `【AI设备助手】` |
 
-### Natural-language queries (Bailian + DB required)
+Equipment dashboard reuses **production MCP tools** with `yield_type=equipment`, plus device registry SQL.
 
-Use real line/device IDs and in-range dates from [docs/mesai-query-1.1.md](docs/mesai-query-1.1.md). No workshop header required.
+### Dashboard — KPIs
 
-```bash
-# Equipment yield by line
-curl -X POST http://127.0.0.1:8000/api/v1/query \
-  -H "Content-Type: application/json" \
-  -d '{"query": "Total equipment yield on line FDQ-SMT-3 for 2026-06-20"}'
+| KPI (zh / en) | Tables | Fetch logic | Status |
+|---------------|--------|-------------|--------|
+| 设备健康度 / Equipment Health | `t_smt_program_consumption_record`, `t_co_device` | `get_yield_aggregation` (equipment achievement) + `compare_yield_periods` trend | ✅ |
+| 预测告警 / Predicted Alerts | `t_smt_program_consumption_record`, `t_co_device` | `get_yield_anomalies` — below_standard bucket count | ✅ |
+| 平均停机 / Avg. Downtime | — | No downtime duration table in MES schema | ❌ |
 
-# Equipment yield by device
-curl -X POST http://127.0.0.1:8000/api/v1/query \
-  -H "Content-Type: application/json" \
-  -d '{"query": "Equipment yield for device BB-SMT-029 on 2026-06-20"}'
+### Dashboard — Charts
 
-# Cross-module analysis
-curl -X POST http://127.0.0.1:8000/api/v1/query \
-  -H "Content-Type: application/json" \
-  -d '{"query": "Cross-module analysis for line FDQ-SMT-3"}'
+| # | Chart (zh / en) | Type | Tables | Fetch logic | Status |
+|---|-----------------|------|--------|-------------|--------|
+| 0 | 设备健康趋势 / Equipment Health Trend | line | `t_smt_program_consumption_record`, `t_co_device` | `get_yield_aggregation` — daily equipment achievement | ✅ |
+| 1 | 告警等级分布 / Alert Level Distribution | bar | — | No alert severity taxonomy in DB | ❌ |
+| 2 | 维护完成率 / Maintenance Completion | gauge | `t_co_device` | SQL `_fetch_device_registry_summary` — valid `expire_date` / registered devices | ✅ |
+| 3 | 停机时长分析 / Downtime by Equipment | bar | `t_smt_program_consumption_record`, `t_co_device` | `get_device_production_rate` — inverse rate as downtime proxy | ✅ |
+| 4 | MTBF趋势 / MTBF Trend | line | — | No MTBF time-series source | ❌ |
+| 5 | 点检完成率 / Inspection Completion | gauge | `t_co_device`, `t_smt_program_consumption_record` | SQL `_fetch_active_device_ratio` — devices with logs / registered | ✅ |
 
-# RAG ingest
-curl -X POST http://127.0.0.1:8000/api/v1/rag/ingest \
-  -H "Content-Type: application/json" \
-  -d '{"doc_type": "anomaly", "text": "FDQ-SMT-3 dip caused by feeder jam on device BB-SMT-029"}'
-```
+### Chat integration
 
-### Direct MCP tool invocation (bypasses Bailian)
-```python
-import asyncio
-from datetime import datetime
-from mcp_tools.production_tools import (
-    get_yield_aggregation_tool,
-    YieldAggregationParams,
-    YieldType, GroupBy, Metric,
-)
-from models.schemas import MCPContext
+| Item | Detail |
+|------|--------|
+| MCP module | **None dedicated** — reuses `mcp_tools/production_tools.py` when NL routes to production intents |
+| **Integration status** | **❌** — no equipment-specific intents in `tool_registry.py` |
+| NL routing | Equipment questions must map to production intents (`yield_type=equipment`, `device_sn` / `line_id`); intent prompt does not list equipment module |
+| Tables (when production tools run) | `t_smt_program_consumption_record`, `t_co_device`, `t_wip_detail`, `t_co_area` |
 
-async def test():
-    params = YieldAggregationParams(
-        yield_type=YieldType.EQUIPMENT,
-        line_id="FDQ-SMT-3",
-        start_date=datetime(2026, 6, 20),
-        end_date=datetime(2026, 6, 21),
-        group_by=GroupBy.DAILY,
-        metric=Metric.SUM,
-    )
-    result = await get_yield_aggregation_tool.run(params, MCPContext())
-    print(result)
-
-asyncio.run(test())
-```
+**Report generation:** Dynamic AI Markdown with **equipment maintenance persona** when a tool runs; same synthesis pipeline as production, different style guidelines. If no intent matches → **fixed equipment greeting** (no DB query). Inherited RAG only from production intents (`yield_anomalies`, `production_root_cause`).
 
 ---
 
-## Troubleshooting
+## 5. Procurement / AI采购助手
 
-| Symptom | Cause | Fix |
-|---|---|---|
-| `invalid literal for int() with base 10: 'port'` | `DATABASE_URL` has literal `host:port` placeholder | Set real host and numeric port in `.env` |
-| `intent: unknown` on every query | Missing `DASHSCOPE_API_KEY` or `BAILIAN_APP_ID` | Add Bailian credentials to `.env` |
-| `intent: unknown`, API error in logs | Invalid Bailian key/app ID or API timeout | Verify credentials in Alibaba Model Studio |
-| Empty `value: 0` or `[]` results | Wrong line ID (`L-01`), out-of-range dates, or schema mismatch | Use IDs from `mesai-query-1.1.md`; see `mesai-mcp-1.1.md` §5 |
-| Validation message, no DB call | Missing `line_id` / `device_sn` / etc. in user query | Rephrase with explicit line or device |
-| MCP tool DB errors | DB unreachable | Check `DATABASE_URL` connectivity |
-| `GET /` returns 404 | Old server without root redirect | Pull latest `main.py`; `/` redirects to `/docs` |
+| Item | Value |
+|------|-------|
+| Route | `/assistant/procurement` |
+| Module key | `procurement` |
+| Scope | `wh_code` (optional) |
+| Frontend composable | `useProcurementAssistantPage.js` |
+| Chart mock fallback | `views/assistants/procurement/charts.js` |
+| Backend builder | `core/dashboard/procurement.py` |
+| Dashboard API | `GET /api/v1/assistants/procurement/dashboard?wh_code=…` |
+| Chat prefix | `【AI采购助手】` |
+
+Procurement has **no dedicated MCP module**; dashboard uses WMS receive/supplier SQL plus `get_inventory_status` for insight context.
+
+### Dashboard — KPIs
+
+| KPI (zh / en) | Tables | Fetch logic | Status |
+|---------------|--------|-------------|--------|
+| 采购节省率 / Savings Rate | `t_wms_receive_item`, `t_wms_receive_doc`, `t_co_item` | SQL `_fetch_spend_comparison` — period-over-period spend change | ✅ |
+| 准交率 / On-time Delivery | `t_wms_receive_doc` | SQL `_fetch_receive_summary` — `receive_date ≤ plan_receive_date` | ✅ |
+| 风险供应商 / Risk Suppliers | `t_wms_receive_doc` | Same summary — suppliers with OTD &lt; 85% and ≥2 receipts | ✅ |
+
+### Dashboard — Charts
+
+| # | Chart (zh / en) | Type | Tables | Fetch logic | Status |
+|---|-----------------|------|--------|-------------|--------|
+| 0 | 采购金额趋势 / Procurement Spend Trend | line | `t_wms_receive_item`, `t_wms_receive_doc`, `t_co_item` | SQL `_fetch_daily_spend` — daily `receive_qty × single_price` (万) | ✅ |
+| 1 | 供应商评分 / Supplier Scores | bar | `t_wms_receive_doc`, `t_co_supplier` | SQL `_fetch_supplier_scores` — OTD % for top-5 volume suppliers | ✅ |
+| 2 | 供应链稳定性 / Supply Chain Stability | gauge | `t_wms_receive_doc` | SQL `_stability_from_receive_docs` — `100 − late delivery rate` | ✅ |
+| 3 | 交付周期对比 / Lead Time Comparison | bar | `t_wms_receive_doc`, `t_wms_receive_item`, `t_co_item` | SQL `_fetch_lead_time_by_abc` — avg days by `abc_type` | ✅ |
+| 4 | 议价空间趋势 / Negotiation Margin | line | — | No price-history table; only snapshot `single_price` | ❌ |
+| 5 | 物料齐套率 / Material Kit Rate | gauge | `t_wms_stock_info`, `t_co_item` | SQL `_fetch_kit_rate` — `stock_qty ≥ min_stock` / items with min stock | ✅ |
+
+### Chat integration
+
+| Item | Detail |
+|------|--------|
+| MCP module | **None dedicated** — dashboard SQL only; chat may hit warehouse `get_inventory_status` |
+| **Integration status** | **❌** — no procurement intents in `tool_registry.py` |
+| NL routing | Supplier risk, spend, replenishment queries often → UNKNOWN greeting unless phrased as warehouse inventory |
+| Tables (indirect chat) | `t_wms_stock_info`, `t_co_item` via warehouse inventory intent only |
+| Tables (dashboard only) | `t_wms_receive_doc`, `t_wms_receive_item`, `t_co_supplier`, `t_wms_stock_info`, `t_co_item` |
+
+**Report generation:** Dynamic AI Markdown with **procurement analyst persona** when any tool runs; otherwise **fixed procurement greeting** with sample prompts. Fallback template has procurement empty-hints but no procurement-specific table renderers.
 
 ---
 
-## Team
+## Summary / 汇总
 
-Built for the **NEUTRON** team MES AI Assistant initiative. Product docs: `docs/`.
+### Dashboard chart integration
+
+| Module | Live charts | Fallback charts |
+|--------|-------------|-----------------|
+| Production | 5 / 6 | 1 |
+| Warehouse | 3 / 6 | 3 |
+| Quality | 5 / 6 | 1 |
+| Equipment | 4 / 6 | 2 |
+| Procurement | 5 / 6 | 1 |
+
+### Chat MCP integration (backend)
+
+| Module | Status | Dedicated MCP tools |
+|--------|--------|---------------------|
+| Production | ✅ | 9 |
+| Warehouse | ✅ | 5 |
+| Quality | ✅ | 4 |
+| Equipment | ❌ | 0 (reuses production) |
+| Procurement | ❌ | 0 (dashboard SQL only) |
+
+### Database table index (by module)
+
+| Table | Production | Warehouse | Quality | Equipment | Procurement |
+|-------|:----------:|:---------:|:-------:|:---------:|:-----------:|
+| `t_smt_program_consumption_record` | ✅ | | | ✅ | |
+| `t_co_device` | ✅ | | | ✅ | |
+| `t_co_standard_time` | ✅ | | | | |
+| `t_co_area` | ✅ | | | ✅ | |
+| `t_wip_detail` | ✅ | trace | | | |
+| `t_aps_plan_mo_info` | chat | | | | |
+| `t_co_item` | chat | ✅ | | | ✅ |
+| `t_wms_stock_info` | | ✅ | | | ✅ |
+| `t_wms_area` | | ✅ | | | |
+| `t_wms_mid_item` | | trace | | | |
+| `t_qm_inspect_info` | | | ✅ | | |
+| `t_qm_problem_report` | | | ✅ | | |
+| `t_qm_problem_reason` | | | ✅ | | |
+| `t_qm_inspect_scheme_info` | | | chat | | |
+| `t_qm_ipqc_doc` | | | chat | | |
+| `t_wms_receive_doc` | | | | | ✅ |
+| `t_wms_receive_item` | | | | | ✅ |
+| `t_co_supplier` | | | | | ✅ |
+
+---
+
+## Related docs / 相关文档
+
+- [frontend.md](./frontend.md) — SPA architecture, env vars, component map
+- [integration.md](./integration.md) — detailed integration report and file map
+- [mesai-vpd.md](./mesai-vpd.md) — visualization-to-database schema (VPD)
+- [database.md](./database.md) — dashboard cache and data latency
