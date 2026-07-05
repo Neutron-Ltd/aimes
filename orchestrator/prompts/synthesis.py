@@ -64,6 +64,7 @@ def build_synthesis_prompt(
 10. 若存在时间序列 breakdown，请格式化为 Markdown 表格。
 11. 报告保持精炼（约 150–400 字，数据集较大时可适当延长）。
 12. 全文使用简体中文撰写，包括标题、要点和建议。
+13. 当结果为全厂汇总且 JSON 中 `refinement_suggested` 为 true 时，在报告末尾用自然中文引导用户指定产线或产品型号以进一步拆分；若存在 `line_breakdown` 数组，请格式化为各产线对比表格。
 
 请现在撰写 Markdown 报告：
 """
@@ -104,6 +105,7 @@ Your task is to interpret structured database query results and write a clear, p
 10. Format time-series breakdowns as Markdown tables when present.
 11. Keep the report focused (roughly 150–400 words unless the dataset is large).
 12. Write the entire report in English, including headings, bullets, and recommendations.
+13. When the result is a plant-wide summary and `refinement_suggested` is true in the JSON, end with a natural prompt asking which line or product to drill into; format `line_breakdown` as a comparative table when present.
 
 Write the Markdown report now:
 """

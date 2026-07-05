@@ -98,6 +98,65 @@ _FIELD_LABELS: dict[str, str] = {
     "process_code": "Process Step",
     "recommended_bay": "Recommended Bay",
     "summary": "Executive Summary",
+    "scope": "Query Scope",
+    "line_count": "Production Line Count",
+    "refinement_suggested": "Drill-Down Suggested",
+}
+
+_FIELD_LABELS_ZH: dict[str, str] = {
+    "yield_type": "数据来源",
+    "line_id": "产线",
+    "device_sn": "目标设备",
+    "metric": "计量方式",
+    "group_by": "时间分组",
+    "value": "累计产量",
+    "analysis_type": "分析模式",
+    "product_code": "产品编码",
+    "model_code": "型号编码",
+    "period_1_total": "时段一合计",
+    "period_2_total": "时段二合计",
+    "growth_rate": "环比变化",
+    "defect_rate": "不良率",
+    "total_inspected": "检验数量",
+    "total_defects": "不良数量",
+    "achievement_pct": "标准工时达成率",
+    "actual_qty": "实际产量",
+    "standard_time": "标准工时目标",
+    "elapsed_hours": "生产耗时（小时）",
+    "capacity_utilization": "产能利用率",
+    "overtime_hours_estimate": "预计加班时长",
+    "personnel_gap": "人员缺口估计",
+    "before_defect_rate": "改善前不良率",
+    "after_defect_rate": "改善后不良率",
+    "process_code": "工序",
+    "recommended_bay": "推荐库位",
+    "summary": "执行摘要",
+    "scope": "查询范围",
+    "line_count": "产线数量",
+    "refinement_suggested": "建议进一步拆分",
+}
+
+_YIELD_TYPE_LABELS_ZH = {
+    "equipment": "设备自动采集日志",
+    "reported": "在制品报工日志",
+}
+
+_METRIC_LABELS_ZH = {
+    "sum": "总产量",
+    "average": "平均产量",
+    "achievement_rate": "达成率",
+}
+
+_GROUP_BY_LABELS_ZH = {
+    "daily": "按日",
+    "hourly": "按小时",
+    "total": "全时段合计",
+}
+
+_SCOPE_LABELS_ZH = {
+    "line": "单产线",
+    "plant": "全厂汇总",
+    "all_lines": "各产线对比",
 }
 
 _TABLE_FIELD_LABELS: dict[str, tuple[str, str]] = {
@@ -111,6 +170,31 @@ _TABLE_FIELD_LABELS: dict[str, tuple[str, str]] = {
     "adjusted_schedule": ("Work Order", "Priority / Plan"),
 }
 
+_TABLE_FIELD_LABELS_ZH: dict[str, tuple[str, str]] = {
+    "breakdown": ("生产时段", "产量"),
+    "devices": ("设备", "平均速率 / 总产量"),
+    "hypotheses": ("问题", "可能原因"),
+    "low_stock": ("物料编码", "状态"),
+    "expiring": ("物料编码", "到期日"),
+    "stagnant_items": ("物料编码", "呆滞数量"),
+    "fifo_lots": ("批次号", "数量 / 入库日期"),
+    "adjusted_schedule": ("工单", "优先级 / 计划"),
+    "line_breakdown": ("产线", "产量"),
+    "lines": ("产线编码", "产线名称"),
+}
+
+
+def _field_labels(locale: str) -> dict[str, str]:
+    return _FIELD_LABELS_ZH if locale == "zh-CN" else _FIELD_LABELS
+
+
+def _table_field_labels(locale: str) -> dict[str, tuple[str, str]]:
+    return _TABLE_FIELD_LABELS_ZH if locale == "zh-CN" else _TABLE_FIELD_LABELS
+
+
+def _unit_suffix(locale: str) -> str:
+    return "件" if locale == "zh-CN" else "units"
+
 
 def _is_empty(value: Any) -> bool:
     if value is None:
@@ -122,8 +206,10 @@ def _is_empty(value: Any) -> bool:
     return False
 
 
-def _format_number(value: Any) -> str:
+def _format_number(value: Any, locale: str = "en-US") -> str:
     if isinstance(value, bool):
+        if locale == "zh-CN":
+            return "是" if value else "否"
         return "Yes" if value else "No"
     if isinstance(value, float):
         if value == int(value):
@@ -141,30 +227,42 @@ def _format_period_label(raw: Any) -> str:
     return text[:10] if len(text) >= 10 else text
 
 
-def _translate_scalar(key: str, value: Any, context: dict[str, Any]) -> str:
+def _translate_scalar(
+    key: str, value: Any, context: dict[str, Any], locale: str = "zh-CN"
+) -> str:
+    zh = locale == "zh-CN"
     if key == "yield_type" and isinstance(value, str):
-        return _YIELD_TYPE_LABELS.get(value.lower(), value.replace("_", " ").title())
+        labels = _YIELD_TYPE_LABELS_ZH if zh else _YIELD_TYPE_LABELS
+        return labels.get(value.lower(), value.replace("_", " ").title())
     if key == "metric" and isinstance(value, str):
-        return _METRIC_LABELS.get(value.lower(), value.replace("_", " ").title())
+        labels = _METRIC_LABELS_ZH if zh else _METRIC_LABELS
+        return labels.get(value.lower(), value.replace("_", " ").title())
     if key == "group_by" and isinstance(value, str):
-        return _GROUP_BY_LABELS.get(value.lower(), value.replace("_", " ").title())
+        labels = _GROUP_BY_LABELS_ZH if zh else _GROUP_BY_LABELS
+        return labels.get(value.lower(), value.replace("_", " ").title())
+    if key == "scope" and isinstance(value, str):
+        if zh:
+            return _SCOPE_LABELS_ZH.get(value.lower(), value)
+        return value.replace("_", " ").title()
     if key == "analysis_type" and isinstance(value, str):
         return _ANALYSIS_TYPE_LABELS.get(value.lower(), value.replace("_", " ").title())
     if key == "device_sn" and value:
-        return f"Machine {value}"
+        return f"设备 {value}" if zh else f"Machine {value}"
     if key in ("growth_rate", "defect_rate", "achievement_pct", "capacity_utilization"):
         if isinstance(value, (int, float)):
             return f"{value:,.2f}%"
     if key == "value":
         metric = str(context.get("metric", "")).lower()
-        formatted = _format_number(value)
+        formatted = _format_number(value, locale)
         if metric == "achievement_rate":
             return f"{formatted}%"
         if metric in ("sum", "average", ""):
-            return f"{formatted} units"
+            return f"{formatted} {_unit_suffix(locale)}"
         return formatted
     if isinstance(value, (int, float)) and key not in ("line_id", "process_code"):
-        return _format_number(value)
+        return _format_number(value, locale)
+    if isinstance(value, bool):
+        return _format_number(value, locale)
     return str(value)
 
 
@@ -180,8 +278,11 @@ def _markdown_table(headers: tuple[str, str], rows: list[tuple[str, str]]) -> st
     return "\n".join(lines)
 
 
-def _rows_from_breakdown(items: list[dict[str, Any]]) -> list[tuple[str, str]]:
+def _rows_from_breakdown(
+    items: list[dict[str, Any]], locale: str = "zh-CN"
+) -> list[tuple[str, str]]:
     rows: list[tuple[str, str]] = []
+    unit = _unit_suffix(locale)
     for item in items:
         period = item.get("bucket") or item.get("date") or "—"
         period_label = _format_period_label(period)
@@ -189,26 +290,58 @@ def _rows_from_breakdown(items: list[dict[str, Any]]) -> list[tuple[str, str]]:
         if qty is None:
             qty = item.get("good_qty", item.get("qty", "—"))
         if isinstance(qty, (int, float)):
-            qty_display = f"{_format_number(qty)} units"
+            qty_display = f"{_format_number(qty, locale)} {unit}"
         else:
             qty_display = str(qty)
         rows.append((period_label, qty_display))
     return rows
 
 
-def _rows_from_devices(items: list[dict[str, Any]]) -> list[tuple[str, str]]:
+def _rows_from_line_breakdown(
+    items: list[dict[str, Any]], locale: str = "zh-CN"
+) -> list[tuple[str, str]]:
     rows: list[tuple[str, str]] = []
+    unit = _unit_suffix(locale)
+    for item in items:
+        name = item.get("area_name") or item.get("area_sn") or "—"
+        value = item.get("value", "—")
+        if isinstance(value, (int, float)):
+            value = f"{_format_number(value, locale)} {unit}"
+        rows.append((str(name), str(value)))
+    return rows
+
+
+def _rows_from_devices(
+    items: list[dict[str, Any]], locale: str = "zh-CN"
+) -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+    unit = _unit_suffix(locale)
     for item in items:
         name = item.get("device_sn") or item.get("device_name") or "—"
         rate = item.get("avg_rate")
         total = item.get("total_qty")
         detail_parts = []
         if rate is not None:
-            detail_parts.append(f"avg {_format_number(rate)}")
+            detail_parts.append(
+                f"平均 {_format_number(rate, locale)}" if locale == "zh-CN"
+                else f"avg {_format_number(rate, locale)}"
+            )
         if total is not None:
-            detail_parts.append(f"total {_format_number(total)} units")
+            detail_parts.append(
+                f"合计 {_format_number(total, locale)} {unit}" if locale == "zh-CN"
+                else f"total {_format_number(total, locale)} {unit}"
+            )
         rows.append((str(name), " / ".join(detail_parts) or "—"))
     return rows
+
+
+def _rows_from_factory_lines(
+    items: list[dict[str, Any]], _locale: str = "zh-CN"
+) -> list[tuple[str, str]]:
+    return [
+        (str(item.get("area_sn") or "—"), str(item.get("area_name") or "—"))
+        for item in items
+    ]
 
 
 def _rows_from_hypotheses(items: list[dict[str, Any]]) -> list[tuple[str, str]]:
@@ -221,66 +354,100 @@ def _rows_from_hypotheses(items: list[dict[str, Any]]) -> list[tuple[str, str]]:
     ]
 
 
-def _rows_from_inventory(items: list[dict[str, Any]], mode: str) -> list[tuple[str, str]]:
+def _rows_from_inventory(
+    items: list[dict[str, Any]], mode: str, locale: str = "zh-CN"
+) -> list[tuple[str, str]]:
     rows: list[tuple[str, str]] = []
+    unit = _unit_suffix(locale)
     for item in items:
         code = str(item.get("item_code") or "—")
         if mode == "low_stock":
-            rows.append((code, f"{_format_number(item.get('qty', 0))} units (min {_format_number(item.get('min_stock', 0))})"))
+            if locale == "zh-CN":
+                rows.append((
+                    code,
+                    f"{_format_number(item.get('qty', 0), locale)} {unit} "
+                    f"(最低 {_format_number(item.get('min_stock', 0), locale)})",
+                ))
+            else:
+                rows.append((
+                    code,
+                    f"{_format_number(item.get('qty', 0), locale)} {unit} "
+                    f"(min {_format_number(item.get('min_stock', 0), locale)})",
+                ))
         elif mode == "expiring":
             rows.append((code, str(item.get("invalid_date") or "—")))
         else:
-            rows.append((code, f"{_format_number(item.get('qty', 0))} units"))
+            rows.append((code, f"{_format_number(item.get('qty', 0), locale)} {unit}"))
     return rows
 
 
-def _rows_from_fifo(items: list[dict[str, Any]]) -> list[tuple[str, str]]:
+def _rows_from_fifo(items: list[dict[str, Any]], locale: str = "zh-CN") -> list[tuple[str, str]]:
+    unit = _unit_suffix(locale)
     return [
         (
             str(item.get("item_lot") or "—"),
-            f"{_format_number(item.get('qty', 0))} units · {item.get('instock_time', '—')}",
+            f"{_format_number(item.get('qty', 0), locale)} {unit} · "
+            f"{item.get('instock_time', '—')}",
         )
         for item in items
     ]
 
 
-def _rows_from_schedule(items: list[dict[str, Any]]) -> list[tuple[str, str]]:
+def _rows_from_schedule(items: list[dict[str, Any]], locale: str = "zh-CN") -> list[tuple[str, str]]:
+    if locale == "zh-CN":
+        return [
+            (
+                str(item.get("mo_number") or "—"),
+                f"优先级 {_format_number(item.get('priority_score', 0), locale)} · "
+                f"数量 {_format_number(item.get('plan_qty', 0), locale)}",
+            )
+            for item in items
+        ]
     return [
         (
             str(item.get("mo_number") or "—"),
-            f"priority {_format_number(item.get('priority_score', 0))} · qty {_format_number(item.get('plan_qty', 0))}",
+            f"priority {_format_number(item.get('priority_score', 0), locale)} · "
+            f"qty {_format_number(item.get('plan_qty', 0), locale)}",
         )
         for item in items
     ]
 
 
-def _render_list_table(key: str, items: list[Any]) -> Optional[str]:
+def _render_list_table(
+    key: str, items: list[Any], locale: str = "zh-CN"
+) -> Optional[str]:
     if not items or not isinstance(items, list):
         return None
     if not all(isinstance(item, dict) for item in items):
         return None
 
-    headers = _TABLE_FIELD_LABELS.get(key)
-    row_builder: Optional[Callable[[list[dict[str, Any]]], list[tuple[str, str]]]] = None
+    headers = _table_field_labels(locale).get(key)
+    row_builder: Optional[Callable[..., list[tuple[str, str]]]] = None
 
     if key == "breakdown":
-        row_builder = _rows_from_breakdown
+        row_builder = lambda items: _rows_from_breakdown(items, locale)
+    elif key == "line_breakdown":
+        row_builder = lambda items: _rows_from_line_breakdown(items, locale)
+    elif key == "lines":
+        row_builder = lambda items: _rows_from_factory_lines(items, locale)
     elif key == "devices":
-        row_builder = _rows_from_devices
+        row_builder = lambda items: _rows_from_devices(items, locale)
     elif key == "hypotheses":
         row_builder = _rows_from_hypotheses
     elif key == "low_stock":
-        row_builder = lambda items: _rows_from_inventory(items, "low_stock")
+        row_builder = lambda items: _rows_from_inventory(items, "low_stock", locale)
     elif key == "expiring":
-        row_builder = lambda items: _rows_from_inventory(items, "expiring")
+        row_builder = lambda items: _rows_from_inventory(items, "expiring", locale)
     elif key == "stagnant_items":
-        row_builder = lambda items: _rows_from_inventory(items, "stagnant")
+        row_builder = lambda items: _rows_from_inventory(items, "stagnant", locale)
     elif key == "fifo_lots":
-        row_builder = _rows_from_fifo
+        row_builder = lambda items: _rows_from_fifo(items, locale)
     elif key == "adjusted_schedule":
-        row_builder = _rows_from_schedule
+        row_builder = lambda items: _rows_from_schedule(items, locale)
     elif key == "probable_causes":
-        headers = ("Likely Factor", "Detail")
+        headers = (
+            ("可能因素", "详情") if locale == "zh-CN" else ("Likely Factor", "Detail")
+        )
         return _markdown_table(
             headers,
             [
@@ -362,6 +529,8 @@ def _fallback_markdown_report(
 
     skip_keys = {
         "breakdown",
+        "line_breakdown",
+        "lines",
         "devices",
         "hypotheses",
         "low_stock",
@@ -375,11 +544,13 @@ def _fallback_markdown_report(
         "modules",
     }
 
+    labels = _field_labels(locale)
+
     for key, value in db_result.items():
         if key in skip_keys or _is_empty(value):
             continue
-        label = _FIELD_LABELS.get(key, re.sub(r"_+", " ", key).title())
-        display = _translate_scalar(key, value, db_result)
+        label = labels.get(key, re.sub(r"_+", " ", key).title())
+        display = _translate_scalar(key, value, db_result, locale)
         lines.append(f"- **{label}:** {display}")
 
     lines.append("")
@@ -389,23 +560,55 @@ def _fallback_markdown_report(
     # Nested anomaly result block
     nested = db_result.get("result")
     if isinstance(nested, dict) and nested:
-        lines.extend(["### Analysis Detail", ""])
+        lines.extend(["### 分析详情" if zh else "### Analysis Detail", ""])
         for key, value in nested.items():
             if _is_empty(value):
                 continue
-            label = _FIELD_LABELS.get(key, re.sub(r"_+", " ", key).title())
+            label = labels.get(key, re.sub(r"_+", " ", key).title())
             if isinstance(value, list):
-                table = _render_list_table(key, value)
+                table = _render_list_table(key, value, locale)
                 if table:
                     lines.append(table)
                     lines.append("")
                     continue
-            lines.append(f"- **{label}:** {_translate_scalar(key, value, db_result)}")
+            lines.append(
+                f"- **{label}:** {_translate_scalar(key, value, db_result, locale)}"
+            )
         lines.append("---")
         lines.append("")
 
+    section_titles_zh = {
+        "breakdown": "产量趋势",
+        "line_breakdown": "各产线产量对比",
+        "lines": "产线结构",
+        "devices": "设备绩效",
+        "hypotheses": "质量根因假设",
+        "low_stock": "低库存预警",
+        "expiring": "临期库存",
+        "stagnant_items": "呆滞库存",
+        "fifo_lots": "FIFO 批次序列",
+        "adjusted_schedule": "排程建议",
+        "probable_causes": "可能生产因素",
+    }
+    section_titles_en = {
+        "breakdown": "Production Trend",
+        "line_breakdown": "Line Output Comparison",
+        "lines": "Factory Line Structure",
+        "devices": "Equipment Performance",
+        "hypotheses": "Quality Root Cause Hypotheses",
+        "low_stock": "Low Stock Alerts",
+        "expiring": "Expiring Inventory",
+        "stagnant_items": "Stagnant Inventory",
+        "fifo_lots": "FIFO Lot Sequence",
+        "adjusted_schedule": "Recommended Schedule",
+        "probable_causes": "Probable Production Factors",
+    }
+    section_titles = section_titles_zh if zh else section_titles_en
+
     for table_key in (
         "breakdown",
+        "line_breakdown",
+        "lines",
         "devices",
         "hypotheses",
         "low_stock",
@@ -418,19 +621,9 @@ def _fallback_markdown_report(
         items = db_result.get(table_key)
         if _is_empty(items) or not isinstance(items, list):
             continue
-        section_title = {
-            "breakdown": "Production Trend",
-            "devices": "Equipment Performance",
-            "hypotheses": "Quality Root Cause Hypotheses",
-            "low_stock": "Low Stock Alerts",
-            "expiring": "Expiring Inventory",
-            "stagnant_items": "Stagnant Inventory",
-            "fifo_lots": "FIFO Lot Sequence",
-            "adjusted_schedule": "Recommended Schedule",
-            "probable_causes": "Probable Production Factors",
-        }.get(table_key, "Detail")
+        section_title = section_titles.get(table_key, "详情" if zh else "Detail")
         lines.extend([f"### {section_title}", ""])
-        table = _render_list_table(table_key, items)
+        table = _render_list_table(table_key, items, locale)
         if table:
             lines.append(table)
         lines.append("")

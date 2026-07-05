@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 from sqlalchemy import text
@@ -77,6 +77,18 @@ class YieldAggregationResult(BaseModel):
     group_by: str
     value: float
     breakdown: list[dict[str, Any]] = Field(default_factory=list)
+    scope: Literal["line", "plant", "all_lines"] = "line"
+    refinement_suggested: bool = False
+    line_breakdown: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class FactoryMetadataParams(BaseModel):
+    """No required inputs — returns structural master data."""
+
+
+class FactoryMetadataResult(BaseModel):
+    line_count: int
+    lines: list[dict[str, str]] = Field(default_factory=list)
 
 
 class YieldAnomaliesParams(BaseModel):
@@ -139,7 +151,13 @@ def build_yield_from_clause(yield_type: YieldType) -> str:
     """
 
 
+def _is_all_lines(line_id: Optional[str]) -> bool:
+    return str(line_id or "").strip().lower() == "all"
+
+
 def _equipment_scope_filter(line_id: Optional[str], device_sn: Optional[str]) -> str:
+    if _is_all_lines(line_id):
+        return "1=1"
     return equipment_scope_filter(line_id, device_sn, alias="eq")
 
 
@@ -148,6 +166,8 @@ def _line_filter(
     line_id: Optional[str] = None,
     device_sn: Optional[str] = None,
 ) -> str:
+    if _is_all_lines(line_id):
+        return "1=1"
     if yield_type == YieldType.EQUIPMENT:
         return _equipment_scope_filter(line_id, device_sn)
     if line_id:
@@ -159,6 +179,48 @@ def _time_column(yield_type: YieldType) -> str:
     if yield_type == YieldType.EQUIPMENT:
         return "eq.create_time"
     return "COALESCE(wd.in_time, wd.create_time)"
+
+
+def _build_all_lines_sql(
+    yield_type: YieldType,
+    metric: Metric,
+) -> str:
+    """Per-line comparative aggregation — GROUP BY area_sn on transactional tables."""
+    time_col = _time_column(yield_type)
+    time_range = f"{time_col} BETWEEN :start_date AND :end_date"
+
+    if yield_type == YieldType.EQUIPMENT:
+        qty_expr = "COALESCE(eq.finish_qty, 0)"
+        denom_expr = "COALESCE(eq.mount_sheet_qty, 0)"
+        return f"""
+            SELECT eq.area_sn,
+                   COALESCE(a.area_name, eq.area_sn) AS area_name,
+                   SUM({qty_expr}) AS qty,
+                   SUM({denom_expr}) AS denom
+            FROM n2admin.t_smt_program_consumption_record eq
+            LEFT JOIN n2admin.t_co_area a ON eq.area_sn = a.area_sn
+            WHERE eq.area_sn IS NOT NULL
+              AND {time_range}
+            GROUP BY eq.area_sn, COALESCE(a.area_name, eq.area_sn)
+            ORDER BY qty DESC
+        """
+
+    good_expr = (
+        "COALESCE(wd.pro_qty, 0) - COALESCE(wd.ng_qty, 0) - COALESCE(wd.scrap_qty, 0)"
+    )
+    denom_expr = "COALESCE(wd.pro_qty, 0)"
+    return f"""
+        SELECT line.area_sn,
+               COALESCE(line.area_name, line.area_sn) AS area_name,
+               SUM({good_expr}) AS good_qty,
+               SUM({denom_expr}) AS denom
+        FROM n2admin.t_wip_detail wd
+        JOIN n2admin.t_co_area ws ON wd.work_stationsn = ws.area_sn
+        JOIN n2admin.t_co_area line ON ws.parent_sn = line.area_sn
+        WHERE {time_range}
+        GROUP BY line.area_sn, COALESCE(line.area_name, line.area_sn)
+        ORDER BY good_qty DESC
+    """
 
 
 def _build_aggregation_sql(
@@ -232,6 +294,56 @@ def _build_aggregation_sql(
     """
 
 
+async def _fetch_all_lines_rows(
+    session: AsyncSession,
+    *,
+    yield_type: YieldType,
+    start_date: datetime,
+    end_date: datetime,
+) -> list[dict[str, Any]]:
+    sql = text(_build_all_lines_sql(yield_type, Metric.SUM))
+    result = await session.execute(
+        sql,
+        {"start_date": start_date, "end_date": end_date},
+    )
+    return [dict(row) for row in result.mappings().all()]
+
+
+def _build_line_breakdown(
+    rows: list[dict[str, Any]],
+    yield_type: YieldType,
+    metric: Metric,
+) -> tuple[list[dict[str, Any]], float]:
+    """Build per-line matrix and plant total from all-lines query rows."""
+    line_breakdown: list[dict[str, Any]] = []
+    plant_total = 0.0
+
+    for row in rows:
+        if metric == Metric.ACHIEVEMENT_RATE:
+            value = round(_row_achievement_rate(row, yield_type), 4)
+        else:
+            value = round(_row_qty(row, yield_type), 4)
+        plant_total += _row_qty(row, yield_type)
+        line_breakdown.append(
+            {
+                "area_sn": row.get("area_sn"),
+                "area_name": row.get("area_name"),
+                "value": value,
+            }
+        )
+
+    if metric == Metric.ACHIEVEMENT_RATE:
+        total_good = sum(_row_qty(r, yield_type) for r in rows)
+        total_denom = sum(float(r.get("denom") or 0) for r in rows)
+        plant_total = (
+            round((total_good / total_denom * 100.0), 4) if total_denom else 0.0
+        )
+    else:
+        plant_total = round(plant_total, 4)
+
+    return line_breakdown, plant_total
+
+
 async def _fetch_aggregation_rows(
     session: AsyncSession,
     *,
@@ -251,7 +363,7 @@ async def _fetch_aggregation_rows(
         "start_date": start_date,
         "end_date": end_date,
     }
-    if line_id:
+    if line_id and not _is_all_lines(line_id):
         bind["line_id"] = line_id
     if device_sn:
         bind["device_sn"] = device_sn
@@ -365,18 +477,43 @@ class GetYieldAggregationTool(BaseMCPTool[YieldAggregationParams, YieldAggregati
         session: AsyncSession | None = None,
     ) -> YieldAggregationResult:
         async with optional_session(session) as db:
-            rows = await _fetch_aggregation_rows(
-                db,
-                yield_type=params.yield_type,
-                line_id=params.line_id,
-                device_sn=params.device_sn,
-                start_date=params.start_date,
-                end_date=params.end_date,
-                group_by=params.group_by,
-            )
-            value, breakdown = _compute_metric(
-                rows, params.yield_type, params.metric, params.group_by
-            )
+            scope: Literal["line", "plant", "all_lines"] = "line"
+            refinement_suggested = False
+            line_breakdown: list[dict[str, Any]] = []
+
+            if _is_all_lines(params.line_id):
+                scope = "all_lines"
+                rows = await _fetch_all_lines_rows(
+                    db,
+                    yield_type=params.yield_type,
+                    start_date=params.start_date,
+                    end_date=params.end_date,
+                )
+                line_breakdown, value = _build_line_breakdown(
+                    rows, params.yield_type, params.metric
+                )
+                breakdown: list[dict[str, Any]] = []
+            else:
+                rows = await _fetch_aggregation_rows(
+                    db,
+                    yield_type=params.yield_type,
+                    line_id=params.line_id,
+                    device_sn=params.device_sn,
+                    start_date=params.start_date,
+                    end_date=params.end_date,
+                    group_by=params.group_by,
+                )
+                value, breakdown = _compute_metric(
+                    rows, params.yield_type, params.metric, params.group_by
+                )
+                if (
+                    params.line_id is None
+                    and params.device_sn is None
+                    and params.group_by == GroupBy.TOTAL
+                ):
+                    scope = "plant"
+                    refinement_suggested = value > 0
+
             return YieldAggregationResult(
                 yield_type=params.yield_type.value,
                 line_id=params.line_id,
@@ -385,6 +522,9 @@ class GetYieldAggregationTool(BaseMCPTool[YieldAggregationParams, YieldAggregati
                 group_by=params.group_by.value,
                 value=round(value, 4),
                 breakdown=breakdown,
+                scope=scope,
+                refinement_suggested=refinement_suggested,
+                line_breakdown=line_breakdown,
             )
 
 
@@ -703,6 +843,47 @@ class GetStandardTimeAchievementTool(BaseMCPTool):
             )
 
 
+# ---------------------------------------------------------------------------
+# Tool 7: get_factory_structure_metadata
+# ---------------------------------------------------------------------------
+
+
+class GetFactoryStructureMetadataTool(
+    BaseMCPTool[FactoryMetadataParams, FactoryMetadataResult]
+):
+    name = "get_factory_structure_metadata"
+    description = (
+        "Lightweight lookup of production line structure from t_co_area master data."
+    )
+
+    async def execute(
+        self,
+        params: FactoryMetadataParams,
+        context: MCPContext,
+        *,
+        session: AsyncSession | None = None,
+    ) -> FactoryMetadataResult:
+        _ = params, context
+        async with optional_session(session) as db:
+            sql = text(
+                """
+                SELECT DISTINCT area_sn, area_name
+                FROM n2admin.t_co_area
+                WHERE area_sn IS NOT NULL
+                ORDER BY area_sn
+                """
+            )
+            result = await db.execute(sql)
+            lines = [
+                {
+                    "area_sn": str(row["area_sn"]),
+                    "area_name": str(row.get("area_name") or row["area_sn"]),
+                }
+                for row in result.mappings().all()
+            ]
+            return FactoryMetadataResult(line_count=len(lines), lines=lines)
+
+
 # Singleton instances for orchestrator registration
 get_yield_aggregation_tool = GetYieldAggregationTool()
 get_yield_anomalies_tool = GetYieldAnomaliesAndPeaksTool()
@@ -710,3 +891,4 @@ compare_yield_periods_tool = CompareYieldPeriodsTool()
 get_product_yield_tool = GetProductYieldTool()
 get_device_production_rate_tool = GetDeviceProductionRateTool()
 get_standard_time_achievement_tool = GetStandardTimeAchievementTool()
+get_factory_structure_metadata_tool = GetFactoryStructureMetadataTool()

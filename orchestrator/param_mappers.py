@@ -13,9 +13,12 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta
 from typing import Optional
 
+from core.reference_date import get_reference_today
+
 from mcp_tools.production_tools import (
     AnalysisType,
     CompareYieldPeriodsParams,
+    FactoryMetadataParams,
     GroupBy,
     Metric,
     YieldAggregationParams,
@@ -63,7 +66,7 @@ def _resolve_yield_type(intent: IntentSchema) -> YieldType:
 def _date_range(intent: IntentSchema) -> tuple[date, date]:
     if intent.start_date and intent.end_date:
         return intent.start_date, intent.end_date
-    today = date.today()
+    today = get_reference_today()
     return today, today
 
 
@@ -87,7 +90,14 @@ def _line_id(intent: IntentSchema) -> str:
 
 
 def _line_scope(intent: IntentSchema) -> Optional[str]:
-    return _strip(intent.line_id)
+    cleaned = _strip(intent.line_id)
+    if cleaned and cleaned.lower() == "all":
+        return "all"
+    return cleaned
+
+
+def intent_to_factory_metadata_params(_intent: IntentSchema) -> FactoryMetadataParams:
+    return FactoryMetadataParams()
 
 
 def intent_to_aggregation_params(intent: IntentSchema) -> YieldAggregationParams:
@@ -117,7 +127,7 @@ def intent_to_anomalies_params(intent: IntentSchema) -> YieldAnomaliesParams:
 
 
 def intent_to_comparison_params(intent: IntentSchema) -> CompareYieldPeriodsParams:
-    today = date.today()
+    today = get_reference_today()
     p1s = intent.period_1_start or (today - timedelta(days=13))
     p1e = intent.period_1_end or (today - timedelta(days=7))
     p2s = intent.period_2_start or (today - timedelta(days=6))
@@ -136,8 +146,8 @@ def intent_to_comparison_params(intent: IntentSchema) -> CompareYieldPeriodsPara
 def intent_to_product_yield_params(intent: IntentSchema) -> ProductYieldParams:
     start, end = _date_range(intent)
     return ProductYieldParams(
-        line_id=_line_id(intent),
-        product_code=_first_present(intent.product_code, intent.model_code),
+        line_id=_line_scope(intent),
+        product_code=_strip(intent.product_code) or _strip(intent.model_code),
         start_date=_start_of_day(start),
         end_date=_end_of_day(end),
     )
@@ -256,6 +266,7 @@ PARAM_MAPPERS = {
     IntentType.PRODUCTION_ROOT_CAUSE: intent_to_root_cause_params,
     IntentType.PRODUCTION_SCHEDULING_OPT: intent_to_scheduling_params,
     IntentType.PRODUCTION_CAPACITY_FORECAST: intent_to_capacity_params,
+    IntentType.FACTORY_METADATA_LOOKUP: intent_to_factory_metadata_params,
     IntentType.QUALITY_DEFECT_ANALYSIS: intent_to_defect_params,
     IntentType.QUALITY_ROOT_CAUSE: intent_to_quality_root_cause_params,
     IntentType.QUALITY_ERROR_PREVENTION: intent_to_error_prevention_params,

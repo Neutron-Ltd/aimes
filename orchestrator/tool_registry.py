@@ -12,7 +12,9 @@ from mcp_tools.production_engines import (
 )
 from mcp_tools.production_tools import (
     compare_yield_periods_tool,
+    FactoryMetadataParams,
     get_device_production_rate_tool,
+    get_factory_structure_metadata_tool,
     get_product_yield_tool,
     get_standard_time_achievement_tool,
     get_yield_aggregation_tool,
@@ -106,6 +108,12 @@ def register_all_tools(mappers: dict[IntentType, ParamMapper]) -> None:
         forecast_capacity_hr_tool,
         mappers[IntentType.PRODUCTION_CAPACITY_FORECAST],
         "Capacity forecast generated",
+    )
+    _register(
+        IntentType.FACTORY_METADATA_LOOKUP,
+        get_factory_structure_metadata_tool,
+        mappers[IntentType.FACTORY_METADATA_LOOKUP],
+        "Factory structure metadata retrieved",
     )
     _register(
         IntentType.QUALITY_DEFECT_ANALYSIS,

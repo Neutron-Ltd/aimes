@@ -9,15 +9,15 @@ from pydantic import BaseModel, Field
 
 
 class ProductYieldParams(BaseModel):
-    line_id: str
-    product_code: str
+    line_id: Optional[str] = None
+    product_code: Optional[str] = None
     start_date: datetime
     end_date: datetime
 
 
 class ProductYieldResult(BaseModel):
-    line_id: str
-    product_code: str
+    line_id: Optional[str] = None
+    product_code: Optional[str] = None
     total_qty: float
     breakdown: list[dict[str, Any]] = Field(default_factory=list)
 

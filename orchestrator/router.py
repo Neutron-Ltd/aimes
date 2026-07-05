@@ -47,6 +47,22 @@ _NO_SYNTHESIS_INTENTS = frozenset(
 )
 
 
+def _router_message(key: str, locale: str, **kwargs: str) -> str:
+    if locale == "zh-CN":
+        messages = {
+            "export_hint": "请使用 POST /api/v1/export 并传入编排器结果 payload 进行导出。",
+            "no_tool": f"未注册该意图对应的工具：{kwargs.get('intent', '')}",
+            "mcp_failed": "MCP 工具执行失败",
+        }
+    else:
+        messages = {
+            "export_hint": "Use POST /api/v1/export with the orchestrator result payload.",
+            "no_tool": f"No tool registered for intent: {kwargs.get('intent', '')}",
+            "mcp_failed": "MCP tool execution failed",
+        }
+    return messages[key]
+
+
 def _resolve_assistant_module(
     query: str, assistant_module: Optional[str]
 ) -> tuple[str, str, str]:
@@ -125,7 +141,7 @@ async def _run_tool(
             intent=intent_schema,
             tool_name=tool.name,
             result=None,
-            message=tool_result.error or "MCP tool execution failed",
+            message=tool_result.error or _router_message("mcp_failed", locale),
             metadata=meta,
         )
 
@@ -173,7 +189,7 @@ async def route_and_execute(
             metadata["rag_context"] = rag_context
 
     if intent.intent == IntentType.CROSS_MODULE_ANALYSIS:
-        validation = validate_intent_params(intent)
+        validation = validate_intent_params(intent, locale)
         if not validation.ok:
             return OrchestratorResponse(
                 intent=intent,
@@ -206,7 +222,7 @@ async def route_and_execute(
                 intent=intent,
                 tool_name=None,
                 result={"export_format": intent.export_format or "xlsx", "hint": "POST /api/v1/export"},
-                message="Use POST /api/v1/export with the orchestrator result payload.",
+                message=_router_message("export_hint", locale),
                 metadata=metadata,
             )
         if intent.parse_error:
@@ -231,13 +247,13 @@ async def route_and_execute(
             intent=intent,
             tool_name=None,
             result=None,
-            message=f"No tool registered for intent: {intent.intent.value}",
+            message=_router_message("no_tool", locale, intent=intent.intent.value),
             metadata=metadata,
         )
 
     tool, mapper, _ = entry
 
-    validation = validate_intent_params(intent)
+    validation = validate_intent_params(intent, locale)
     if not validation.ok:
         return OrchestratorResponse(
             intent=intent,

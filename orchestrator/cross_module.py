@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import timedelta
 from typing import Optional
+
+from core.reference_date import get_reference_today
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,7 +43,7 @@ async def run_cross_module_analysis(
     *,
     session: Optional[AsyncSession] = None,
 ) -> CrossModuleResult:
-    today = date.today()
+    today = get_reference_today()
     start = _start_of_day(today - timedelta(days=7))
     end = _end_of_day(today)
 

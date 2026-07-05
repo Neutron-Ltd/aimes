@@ -30,6 +30,7 @@ class IntentType(str, Enum):
     PRODUCTION_PRODUCT_YIELD = "production_product_yield"
     PRODUCTION_DEVICE_RATE = "production_device_rate"
     PRODUCTION_STANDARD_TIME = "production_standard_time"
+    FACTORY_METADATA_LOOKUP = "factory_metadata_lookup"
 
     # Quality (Phase 3)
     QUALITY_DEFECT_ANALYSIS = "quality_defect_analysis"
