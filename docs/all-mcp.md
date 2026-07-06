@@ -141,9 +141,9 @@ Frontend: [`frontend/src/api/chat.js`](../frontend/src/api/chat.js), [`frontend/
 
 | File | Role |
 |------|------|
-| [`orchestrator/param_mappers.py`](../orchestrator/param_mappers.py) | `IntentSchema` → tool-specific Pydantic params; date defaults use **`dashboard_reference_date`** (default `2026-06-21`) when missing |
+| [`orchestrator/param_mappers.py`](../orchestrator/param_mappers.py) | `IntentSchema` → tool-specific Pydantic params; date defaults use **`get_reference_today()`** (server local calendar date) when missing |
 | [`orchestrator/param_validation.py`](../orchestrator/param_validation.py) | Pre-dispatch checks — bilingual user-facing errors; **`YIELD_AGGREGATION` blocks `metric=achievement_rate`** (use `PRODUCTION_PLAN_ACHIEVEMENT`); plant-wide scope allowed for sum/avg |
-| [`core/reference_date.py`](../core/reference_date.py) | Single source of truth for anchored “today” in intent prompts and param mappers |
+| [`core/reference_date.py`](../core/reference_date.py) | Single source of truth for “today” in intent prompts, param mappers, cross-module, and dashboards (`date.today()` on server clock) |
 
 **Yield type routing:** `_resolve_yield_type()` defaults to **`equipment`** unless intent sets `yield_type: "reported"`.
 
@@ -447,7 +447,9 @@ line_id = null (equipment or reported)
 | `refinement_suggested` | `true` when plant-wide total > 0 — synthesis asks user to drill down by line/product |
 | `line_breakdown` | Per-line `{area_sn, area_name, value}` matrix when `scope="all_lines"` |
 
-**System date anchoring:** Intent prompts and param mappers use `dashboard_reference_date` (env `DASHBOARD_REFERENCE_DATE`, default **`2026-06-21`**) so colloquial dates like “今天” resolve against factory data, not the host clock.
+**System date anchoring:** Intent prompts, param mappers, cross-module analysis, and dashboard windows use **`get_reference_today()`** → server local **`date.today()`**. Colloquial dates like “今天” resolve against the API host calendar. Recommend `TZ=Asia/Shanghai` in Docker when operators expect China local time.
+
+**Data availability caveat:** MES PostgreSQL history currently ends around **2026-06-21** ([data-may-june.md](./data-may-june.md)). Queries for “today” after the last data day may return empty or zero results until live data catches up.
 
 ---
 
@@ -506,7 +508,7 @@ line_id = null (equipment or reported)
 
 | Former gap | Current behavior |
 |------------|------------------|
-| Host clock vs factory data year | `DASHBOARD_REFERENCE_DATE` anchors intent dates to **2026-06-21** |
+| Host clock vs factory data year | `get_reference_today()` uses real server date; historical MES data ends **2026-06-21** — post-snapshot “today” queries may be empty |
 | Plant-wide yield blocked by validation | `YIELD_AGGREGATION` accepts null `line_id` / `device_sn` |
 | “有几条产线?” → UNKNOWN | `FACTORY_METADATA_LOOKUP` → `get_factory_structure_metadata` |
 | Line yield misrouted to product yield | Intent prompt routing rules prefer `YIELD_AGGREGATION` when no product code |
@@ -557,7 +559,7 @@ sequenceDiagram
 | Param validation | `orchestrator/param_validation.py` |
 | Router | `orchestrator/router.py` |
 | Intent prompt | `orchestrator/prompts/intent.py` |
-| Reference date | `core/reference_date.py`, `core/config.py` (`DASHBOARD_REFERENCE_DATE`) |
+| Reference date | `core/reference_date.py` (`get_reference_today()` → `date.today()`) |
 | Synthesis prompt | `orchestrator/prompts/synthesis.py` |
 | Cross-module | `orchestrator/cross_module.py` |
 | Personas / greetings | `orchestrator/module_personas.py` |

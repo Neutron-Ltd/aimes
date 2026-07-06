@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any, Optional, Protocol
 
-from core.config import get_settings
+from core.reference_date import get_reference_today
 from models.dashboard import (
     AssistantDashboardResponse,
     DashboardChartSlot,
@@ -30,9 +30,7 @@ class DashboardBuilder(Protocol):
 
 def resolve_date_range(lookback_days: int) -> tuple[datetime, datetime]:
     """Return [start, end] datetimes for the lookback window."""
-    settings = get_settings()
-    ref_end = settings.dashboard_reference_date
-    end_day = min(date.today(), ref_end)
+    end_day = get_reference_today()
     end = datetime.combine(end_day, datetime.max.time()).replace(microsecond=0)
     start = datetime.combine(
         end_day - timedelta(days=max(lookback_days - 1, 0)),

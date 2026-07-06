@@ -9,7 +9,7 @@ Complete reference for every instruction string the backend sends to an LLM (Ali
 | Intent extraction | `orchestrator/prompts/intent.py` |
 | Report synthesis | `orchestrator/prompts/synthesis.py` |
 | Module personas | `orchestrator/module_personas.py` |
-| Reference date | `core/reference_date.py`, `core/config.py` |
+| Reference date | `core/reference_date.py` |
 | Intent parsing | `orchestrator/intent_utils.py` |
 | Fallback reports | `orchestrator/report_generator.py` |
 | Param validation | `orchestrator/param_validation.py` |
@@ -34,7 +34,7 @@ Voice queries (`POST /api/v1/query/voice`) transcribe audio first, then use the 
 
 **Locale signaling:** Request body `locale` (`zh-CN` default, `en-US`); header `Accept-Language`. Unknown locales fall back to **zh-CN** in prompt builders.
 
-**System date anchoring:** Both intent prompts and param mappers use `dashboard_reference_date` from config (env `DASHBOARD_REFERENCE_DATE`, default **`2026-06-21`**) — not the host clock — so relative phrases like “今天”, “20号”, “last week” resolve against factory data.
+**System date anchoring:** Intent prompts, param mappers, cross-module analysis, and dashboard windows use **`get_reference_today()`** → server local **`date.today()`**. Relative phrases like “今天”, “20号”, “last week” resolve against the API container’s calendar date. Set `TZ=Asia/Shanghai` in Docker if operators expect China local time on a UTC host.
 
 ---
 
@@ -46,15 +46,15 @@ Voice queries (`POST /api/v1/query/voice`) transcribe audio first, then use the 
 ### Chinese (`zh-CN`)
 
 ```
-当前系统时间上下文：年份为 2026，今天日期为 2026-06-21。所有相对表达如「今天」「昨天」「上周」「上个月」或「20号」等，必须相对 2026-06-21 计算日期范围。
+当前系统时间上下文：年份为 {year}，今天日期为 {YYYY-MM-DD}。所有相对表达如「今天」「昨天」「上周」「上个月」或「20号」等，必须相对 {YYYY-MM-DD} 计算日期范围。
 ```
 
-*(Year and date are dynamic from `get_reference_today()`.)*
+*(Year and date come from `get_reference_today()` = server local calendar date.)*
 
 ### English (`en-US`)
 
 ```
-Current System Time Context: The year is 2026. Today's date is 2026-06-21. All relative expressions such as 'today', 'yesterday', 'last week', 'last month', or specific dates like 'the 20th' must calculate their date ranges relative to 2026-06-21.
+Current System Time Context: The year is {year}. Today's date is {YYYY-MM-DD}. All relative expressions such as 'today', 'yesterday', 'last week', 'last month', or specific dates like 'the 20th' must calculate their date ranges relative to {YYYY-MM-DD}.
 ```
 
 ---
@@ -143,8 +143,8 @@ Quality intents: QUALITY_DEFECT_ANALYSIS, QUALITY_ROOT_CAUSE,
 Warehouse intents: WAREHOUSE_INVENTORY_MONITOR, WAREHOUSE_INBOUND_OUTBOUND,
   WAREHOUSE_OBSOLETE_PROFILE, WAREHOUSE_TRACE_FORWARD, WAREHOUSE_TRACE_REVERSE
 System intents: EXPORT_REPORT, CROSS_MODULE_ANALYSIS, UNKNOWN
-当前时间：2026-06-21
-当前系统时间上下文：年份为 2026，今天日期为 2026-06-21。所有相对表达如「今天」「昨天」「上周」「上个月」或「20号」等，必须相对 2026-06-21 计算日期范围。
+当前时间：{ref}
+当前系统时间上下文：年份为 {year}，今天日期为 {ref}。所有相对表达如「今天」「昨天」「上周」「上个月」或「20号」等，必须相对 {ref} 计算日期范围。
 用户问题：<USER_QUERY>
 ```
 
@@ -181,8 +181,8 @@ Output ONLY a valid JSON object with these fields (use null for unknown entity f
 { ... same JSON schema as zh-CN ... }
 Production intents: ... (includes FACTORY_METADATA_LOOKUP) ...
 System intents: EXPORT_REPORT, CROSS_MODULE_ANALYSIS, UNKNOWN
-Current datetime: 2026-06-21
-Current System Time Context: The year is 2026. Today's date is 2026-06-21. All relative expressions such as 'today', 'yesterday', 'last week', 'last month', or specific dates like 'the 20th' must calculate their date ranges relative to 2026-06-21.
+Current datetime: {ref}
+Current System Time Context: The year is {year}. Today's date is {ref}. All relative expressions such as 'today', 'yesterday', 'last week', 'last month', or specific dates like 'the 20th' must calculate their date ranges relative to {ref}.
 User Query: <USER_QUERY>
 ```
 
@@ -539,6 +539,6 @@ That string then enters the same two-pass intent + synthesis pipeline.
 
 | Setting | Env var | Default | Used by |
 |---------|---------|---------|---------|
-| Reference date | `DASHBOARD_REFERENCE_DATE` | `2026-06-21` | Intent prompt, param mappers, cross-module |
+| Server timezone | `TZ` (OS/Docker) | host default | `get_reference_today()` — recommend `Asia/Shanghai` for CN operators |
 | Bailian app | `BAILIAN_APP_ID` | — | Intent + synthesis |
 | DashScope key | `DASHSCOPE_API_KEY` | — | Intent + synthesis |

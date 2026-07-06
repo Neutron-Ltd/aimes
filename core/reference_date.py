@@ -1,15 +1,13 @@
-"""System reference date for MES data anchoring (matches dashboard snapshot)."""
+"""Calendar 'today' for intent parsing, param defaults, and dashboard windows."""
 
 from __future__ import annotations
 
 from datetime import date
 
-from core.config import get_settings
-
 
 def get_reference_today() -> date:
-    """Return the anchored 'today' for intent parsing and param defaults."""
-    return get_settings().dashboard_reference_date
+    """Return the server local calendar date for intent parsing and param defaults."""
+    return date.today()
 
 
 def get_system_time_context_block(locale: str) -> str:

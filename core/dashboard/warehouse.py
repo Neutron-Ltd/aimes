@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.config import get_settings
+from core.reference_date import get_reference_today
 from core.dashboard.base import (
     fallback_chart,
     fallback_kpi,
@@ -33,9 +33,7 @@ AGE_BUCKET_LABELS_EN = ["0-30d", "31-60d", "61-90d", "91-180d", "180d+"]
 
 
 def _reference_datetime() -> datetime:
-    settings = get_settings()
-    ref_end = settings.dashboard_reference_date
-    end_day = min(date.today(), ref_end)
+    end_day = get_reference_today()
     return datetime.combine(end_day, datetime.max.time()).replace(microsecond=0)
 
 

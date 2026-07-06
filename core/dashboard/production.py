@@ -8,7 +8,7 @@ from typing import Any, Optional
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.config import get_settings
+from core.reference_date import get_reference_today
 from core.dashboard.base import (
     bucket_label,
     fallback_chart,
@@ -46,9 +46,7 @@ DEFECT_CHART_MONTHS = 6
 
 
 def _month_window(months: int) -> tuple[datetime, datetime]:
-    settings = get_settings()
-    ref_end = settings.dashboard_reference_date
-    end_day = min(date.today(), ref_end)
+    end_day = get_reference_today()
     end = datetime.combine(end_day, datetime.max.time()).replace(microsecond=0)
     year, month = end.year, end.month
     start_month = month - (months - 1)

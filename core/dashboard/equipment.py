@@ -8,7 +8,7 @@ from typing import Any, Optional
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.config import get_settings
+from core.reference_date import get_reference_today
 from core.dashboard.base import (
     bucket_label,
     fallback_chart,
@@ -50,8 +50,7 @@ async def _fetch_device_registry_summary(
     session: AsyncSession,
     line_id: Optional[str],
 ) -> dict[str, Any]:
-    settings = get_settings()
-    ref_date = settings.dashboard_reference_date
+    ref_date = get_reference_today()
     line_sql, line_bind = _line_filter(line_id)
     sql = text(
         f"""

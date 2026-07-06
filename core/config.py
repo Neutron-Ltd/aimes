@@ -2,7 +2,6 @@
 
 from functools import lru_cache
 
-from datetime import date
 from typing import Optional
 
 from pydantic import Field
@@ -39,11 +38,6 @@ class Settings(BaseSettings):
     default_workshop_id: str = "WS-001"
     default_wh_code: Optional[str] = Field(
         default=None, validation_alias="DEFAULT_WH_CODE"
-    )
-    dashboard_reference_date: date = Field(
-        default=date(2026, 6, 21),
-        validation_alias="DASHBOARD_REFERENCE_DATE",
-        description="Latest MES snapshot date for dashboard lookback windows",
     )
 
     dashscope_api_key: str = Field(default="", validation_alias="DASHSCOPE_API_KEY")
