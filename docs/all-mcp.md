@@ -101,10 +101,20 @@ class BaseMCPTool(ABC):
 | 5 | `validate_intent_params(intent, locale)` | Block dispatch if required entities missing (locale-aware messages) |
 | 6 | `get_tool_for_intent()` + `param_mappers` | Map intent → tool params |
 | 7 | `tool.run(params, context)` | `MCPToolResult` with JSON `data` |
-| 8 | `generate_ai_analysis()` | Markdown report using **module persona** |
+| 8 | `generate_ai_analysis()` | Markdown report using **module persona** + synthesis rules (incl. **exact `area_name` copy** — rule #15 in [all-prompt.md](./all-prompt.md)) |
 | 9 | Fallback | `_fallback_markdown_report()` if Bailian fails |
 
 **Frontend wiring:** [`frontend/src/adapters/chat.js`](../frontend/src/adapters/chat.js) prefixes queries with `【AI…助手】` and sends `assistant_module`. Live chat is gated by `VITE_INTEGRATED_ASSISTANTS` (default: `production` only) — backend MCP is wired regardless.
+
+**Chat history (parallel to query, not MCP):** [`core/chat_store.py`](../core/chat_store.py) persists messages in SQLite (`CHAT_DB_PATH`). [`api/routes.py`](../api/routes.py) exposes:
+
+| Method | Path | Scope |
+|--------|------|-------|
+| `GET` | `/api/v1/chat/history?assistant_module={module}` | List messages for workshop + module |
+| `POST` | `/api/v1/chat/messages` | Append message (`assistant_module` in body) |
+| `DELETE` | `/api/v1/chat/history?assistant_module={module}` | Clear one module thread |
+
+Frontend: [`frontend/src/api/chat.js`](../frontend/src/api/chat.js), [`frontend/src/composables/useChatHistory.js`](../frontend/src/composables/useChatHistory.js), wired in [`AssistantChatConsole.vue`](../frontend/src/components/AssistantChatConsole.vue). Valid modules: `production`, `warehouse`, `quality`, `equipment`, `procurement`.
 
 **Report format:** Dynamic AI Markdown (primary) or deterministic template fallback — **not** a fixed PDF layout. Persona and section hints come from [`orchestrator/module_personas.py`](../orchestrator/module_personas.py); numbers come from tool JSON.
 
@@ -169,6 +179,7 @@ class BaseMCPTool(ABC):
 | Path | Trigger | NL parsing? | MCP usage |
 |------|---------|-------------|-----------|
 | **Chat** | `POST /api/v1/query` | Yes (Bailian) | One tool per intent (usually) |
+| **Chat history** | `GET/POST/DELETE /api/v1/chat/*` | No | SQLite only (`core/chat_store.py`); scoped by `workshop_id` + `assistant_module` |
 | **Dashboard** | `GET /assistants/{module}/dashboard` | No | Direct `tool.run()` from `core/dashboard/{module}.py` |
 
 Dashboard builders call MCP tools **directly** with explicit Pydantic params — faster, deterministic, no intent extraction. Some chart slots use **additional custom SQL** in the dashboard file (not separate MCP tools).
@@ -202,7 +213,7 @@ Legend:
 | Intent | Tool name | Tables | Logic summary |
 |--------|-----------|--------|-----------------|
 | `YIELD_AGGREGATION` | `get_yield_aggregation` | `t_smt_program_consumption_record`, `t_wip_detail`, `t_co_area` | Route by `yield_type`; group by daily/hourly/total; metrics **sum/avg only** (`achievement_rate` deprecated — use plan tool); plant-wide / all-lines / single-line |
-| `PRODUCTION_PLAN_ACHIEVEMENT` | `get_plan_achievement_rate` | `t_pm_mo_base`, `t_pm_project_base`, `t_pm_mo_online`, `t_pm_mo_online_log`, `t_co_area` | **达成率 = SUM(output_qty)/SUM(plan_qty)×100**; online-order filter; `mo_number` → `project_base`; `line_id="all"` matrix; group by daily/weekly/monthly/total — see [pm-plan-tables.md](./pm-plan-tables.md) |
+| `PRODUCTION_PLAN_ACHIEVEMENT` | `get_plan_achievement_rate` | `t_pm_mo_base`, `t_pm_project_base`, `t_pm_mo_online`, `t_pm_mo_online_log`, `t_co_area` | **达成率 = SUM(output_qty)/SUM(plan_qty)×100**; online-order filter; `mo_number` → `project_base`; `line_id="all"` per-line matrix (`mb.area_sn LIKE '%-SMT-%'` + `t_co_area.area_name`); matrix enabled for `group_by="total"` **or** single-day range; group by daily/weekly/monthly/total — see [pm-plan-tables.md](./pm-plan-tables.md) |
 | `YIELD_ANOMALIES` | `get_yield_anomalies_and_peaks` | Same as aggregation | Hourly series → volatility (std dev), below_standard buckets (default 90% threshold), or peak hourly; requires line, device, or `"all"` |
 | `YIELD_COMPARISON` | `compare_yield_periods` | Same | Two period totals + Python growth rate; requires line, device, or `"all"` |
 | `PRODUCTION_PRODUCT_YIELD` | `get_product_yield` | `t_wip_detail`, `t_co_area`, `t_co_item` | Daily good qty per `product_code` on line; validation requires line + product |
@@ -228,6 +239,17 @@ Legend:
 | Chart 5 downtime | ⚡ `get_yield_anomalies` (below_standard) | ✅ |
 
 **Report persona:** Production planning analyst; RAG on anomalies + root cause.
+
+**`get_plan_achievement_rate` result extensions** ([`core/analytics/plan_achievement.py`](../core/analytics/plan_achievement.py)):
+
+| Field | When set |
+|-------|----------|
+| `scope` | `"line"`, `"plant"` (no line/mo/product filter), or `"all_lines"` (`line_id="all"` with per-line rows) |
+| `refinement_suggested` | `true` when plant-wide total has data — synthesis may ask user to drill down |
+| `line_breakdown` | `{area_sn, area_name, achievement_rate, actual_qty, planned_qty}` per line when `scope="all_lines"` (e.g. 「今天各产线达成率」) |
+| `breakdown` | Time buckets when `group_by` is daily/weekly/monthly |
+
+**Example NL query:** 「今天各产线的达成率如何？」→ intent sets `line_id="all"`, single-day dates → returns all SMT lines with online MOs for that day; names come from `t_co_area.area_name` (e.g. `HZ-SMT-6` → 鸿志贴片六线).
 
 ---
 
@@ -545,6 +567,7 @@ sequenceDiagram
 | Dashboard builders | `core/dashboard/{production,warehouse,quality,equipment,procurement}.py` |
 | Intent models | `models/schemas.py`, `models/intents/*.py` |
 | API | `api/routes.py` |
-| Frontend chat | `frontend/src/adapters/chat.js`, `frontend/src/composables/useAssistantChat.js` |
+| Frontend chat | `frontend/src/adapters/chat.js`, `frontend/src/composables/useAssistantChat.js`, `frontend/src/composables/useChatHistory.js`, `frontend/src/api/chat.js` |
+| Chat persistence | `core/chat_store.py`, `db/migrations/002_chat_history.sql` (PG schema doc; runtime SQLite) |
 
 ---

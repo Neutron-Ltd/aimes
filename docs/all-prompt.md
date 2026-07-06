@@ -15,6 +15,7 @@ Complete reference for every instruction string the backend sends to an LLM (Ali
 | Param validation | `orchestrator/param_validation.py` |
 | Router static copy | `orchestrator/router.py` |
 | Voice mock | `core/voice/transcribe.py` |
+| Chat persistence | `core/chat_store.py` (not sent to LLM) |
 
 **Companion:** [all-mcp.md](./all-mcp.md) (tool architecture)
 
@@ -240,6 +241,8 @@ User Query: <USER_QUERY>
 11. 报告保持精炼（约 150–400 字，数据集较大时可适当延长）。
 12. 全文使用简体中文撰写，包括标题、要点和建议。
 13. 当结果为全厂汇总且 JSON 中 `refinement_suggested` 为 true 时，在报告末尾用自然中文引导用户指定产线或产品型号以进一步拆分；若存在 `line_breakdown` 数组，请格式化为各产线对比表格。
+14. 计划达成率（`achievement_rate`）表示 SUM(output_qty)/SUM(plan_qty)×100，范围通常 0–150%；说明 `actual_qty`（实际产出）与 `planned_qty`（计划数量）的含义，勿与设备日志 finish_qty 混淆。
+15. **名称与编码必须原样复制**：JSON 中的 `area_name`、`area_sn`、`device_sn`、`model_code`、`mo_number`、`product_code` 等字段，在表格和正文中必须与 JSON **逐字一致**，不得改写、翻译、同义替换或替换为读音/字形相近的字（例如 JSON 为「鸿志贴片六线」时不得写成「荣志贴片六线」）；`line_breakdown`、`lines`、`devices` 等数组表格中的产线名称列必须直接使用 JSON 里的 `area_name` 原值。
 
 请现在撰写 Markdown 报告：
 ```
@@ -283,11 +286,25 @@ Your task is to interpret structured database query results and write a clear, p
 11. Keep the report focused (roughly 150–400 words unless the dataset is large).
 12. Write the entire report in English, including headings, bullets, and recommendations.
 13. When the result is a plant-wide summary and `refinement_suggested` is true in the JSON, end with a natural prompt asking which line or product to drill into; format `line_breakdown` as a comparative table when present.
+14. Plan `achievement_rate` is SUM(output_qty)/SUM(plan_qty)×100 (typically 0–150%); explain `actual_qty` vs `planned_qty`; do not confuse with equipment-log finish_qty.
+15. **Copy names and codes exactly**: fields such as `area_name`, `area_sn`, `device_sn`, `model_code`, `mo_number`, and `product_code` in tables and prose must match the JSON **character-for-character** — do not paraphrase, translate, substitute synonyms, or swap visually or phonetically similar characters (e.g. if JSON says 「鸿志贴片六线」, never write 「荣志贴片六线」); line-name columns in `line_breakdown`, `lines`, `devices`, and similar arrays must use the exact `area_name` value from JSON.
 
 Write the Markdown report now:
 ```
 
 **RAG empty placeholder (en-US):** `(No supplementary knowledge-base context available.)`
+
+### 4.3 Exact name fidelity (rule #15)
+
+Added to both locales to prevent Bailian from paraphrasing MES master-data labels when formatting `line_breakdown` and similar tables.
+
+| Concern | Mitigation |
+|---------|------------|
+| LLM substitutes similar Chinese characters (e.g. 鸿志 → 荣志) | Rule #15 with explicit counter-example |
+| Numeric / ID fields drift | Same rule covers `area_sn`, `device_sn`, `mo_number`, `product_code`, etc. |
+| Fallback path | `_fallback_markdown_report()` renders `area_name` verbatim from JSON via `_rows_from_line_breakdown()` — no LLM involved |
+
+**Source of truth for line names:** `t_co_area.area_name` joined in MCP SQL (e.g. [`core/analytics/plan_achievement.py`](../core/analytics/plan_achievement.py)); synthesis must not rename values in the Markdown layer.
 
 ---
 
@@ -441,7 +458,7 @@ Intent routing is unavailable: {reason}. Check DASHSCOPE_API_KEY and BAILIAN_APP
 3. Optional banner when synthesis failed (zh/en)
 4. **Empty result:** `### 发现` / `### Findings` + no-records message + empty hints from persona
 5. **Has data:** `### 关键指标` / `### Key Metrics` + localized field labels
-6. Markdown tables for `breakdown`, `line_breakdown`, `lines`, `devices`, etc.
+6. Markdown tables for `breakdown`, `line_breakdown`, `lines`, `devices`, etc. — **`area_name` and codes copied verbatim from JSON** (contrast with Bailian synthesis, which may drift without rule #15)
 
 #### Empty-state body copy
 
@@ -514,7 +531,7 @@ That string then enters the same two-pass intent + synthesis pipeline.
 | Intent failure message | No | **zh-CN or en-US** |
 | Fallback report | No | **zh-CN or en-US** (full template) |
 | Voice mock transcript | No (then piped to intent) | **English** |
-| Chat history API | No | N/A |
+| Chat history API | No | N/A — persistence via `GET/POST/DELETE /api/v1/chat/*` + `assistant_module`; not sent to Bailian |
 
 ---
 

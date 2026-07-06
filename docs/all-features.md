@@ -51,6 +51,7 @@ flowchart TB
 
 - **Dashboard:** `useIntegratedAssistantPage.js` → `GET /api/v1/assistants/{module}/dashboard` → SQLite cache (server) → `core/dashboard/{module}.py` → MCP tools + SQL → frontend merges live slots via `adapters/chartSlots.js` (only when `source === "live"`).
 - **Chat:** `useAssistantChat.js` → `adapters/chat.js` → `POST /api/v1/query` → Bailian intent parse → MCP tool → Bailian synthesis → Markdown reply (or deterministic fallback template).
+- **Chat history:** `useChatHistory.js` → `api/chat.js` → `GET/POST /api/v1/chat/*` (scoped by `X-MES-Workshop-Id` + `assistant_module`); SQLite at `CHAT_DB_PATH`; load on mount, save after each exchange in `AssistantChatConsole.vue` (all five modules).
 
 ---
 
@@ -65,7 +66,7 @@ flowchart TB
 | Chart loading UX | ✅ | Plain "Loading" text in chart boxes; staggered ECharts init |
 | Live chat API (backend) | ✅ | Orchestrator + MCP fully wired for production, warehouse, quality |
 | Live chat API (frontend gate) | Config | `VITE_INTEGRATED_ASSISTANTS` (default: `production` only); not counted in ✅/❌ below |
-| Chat history persistence | ✅ | Per workshop + assistant module via SQLite; `AssistantChatConsole` loads/saves via `/api/v1/chat/*` |
+| Chat history persistence | ✅ | Per `workshop_id` + `assistant_module` in SQLite (`core/chat_store.py`); `GET/POST/DELETE /api/v1/chat/history|messages`; frontend `useChatHistory.js` + `api/chat.js`; failures non-blocking |
 | Partial dashboard flag | ✅ | API sets `partial: true` when any slot falls back; UI does not surface it yet |
 
 ---
@@ -80,6 +81,7 @@ Reports are **not** a fixed PDF template. Content is **dynamic** based on the us
 | **UNKNOWN intent** | **Fixed greeting** — static module greeting + sample prompts from `module_personas.py` (no tool call, no DB query) |
 | **Fallback** | **Deterministic template** — `_fallback_markdown_report()` builds titled sections, metric bullets, and tables from tool JSON when Bailian is unavailable or fails |
 | **Export** | `EXPORT_REPORT` intent wraps the last synthesis (cross-module) |
+| **Name fidelity** | Synthesis prompt rule **#15** — `area_name`, `area_sn`, and other codes must be copied **character-for-character** from tool JSON (see [all-prompt.md](./all-prompt.md)); fallback tables always use raw JSON values |
 
 Structure is guided by persona prompts (e.g. "executive summary → metrics → actions"); wording and numbers change per query and data.
 
@@ -124,11 +126,12 @@ Structure is guided by persona prompts (e.g. "executive summary → metrics → 
 | MCP module | `mcp_tools/production_tools.py`, `mcp_tools/production_engines.py` |
 | **Integration status** | **✅** — 10 dedicated intents in `orchestrator/tool_registry.py` |
 | NL routing | User question → Bailian intent extraction → production intent → MCP tool → synthesis with production analyst persona |
+| Example | 「今天各产线的达成率如何？」→ `PRODUCTION_PLAN_ACHIEVEMENT`, `line_id="all"`, single-day range → `get_plan_achievement_rate` → per-line `line_breakdown` from `t_pm_mo_base` + `t_co_area.area_name` |
 
 | Intent / tool | PostgreSQL tables |
 |---------------|-------------------|
 | `get_yield_aggregation` | `t_smt_program_consumption_record`, `t_co_device` |
-| `get_plan_achievement_rate` | `t_pm_mo_base`, `t_pm_project_base`, `t_pm_mo_online`, `t_pm_mo_online_log` |
+| `get_plan_achievement_rate` | `t_pm_mo_base`, `t_pm_project_base`, `t_pm_mo_online`, `t_pm_mo_online_log`, `t_co_area` |
 | `get_yield_anomalies_and_peaks` | `t_smt_program_consumption_record`, `t_co_device` |
 | `compare_yield_periods` | `t_smt_program_consumption_record`, `t_co_device` |
 | `get_product_yield` | `t_smt_program_consumption_record`, `t_co_device`, `t_co_item` |
