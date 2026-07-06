@@ -66,6 +66,7 @@ def build_synthesis_prompt(
 12. 全文使用简体中文撰写，包括标题、要点和建议。
 13. 当结果为全厂汇总且 JSON 中 `refinement_suggested` 为 true 时，在报告末尾用自然中文引导用户指定产线或产品型号以进一步拆分；若存在 `line_breakdown` 数组，请格式化为各产线对比表格。
 14. 计划达成率（`achievement_rate`）表示 SUM(output_qty)/SUM(plan_qty)×100，范围通常 0–150%；说明 `actual_qty`（实际产出）与 `planned_qty`（计划数量）的含义，勿与设备日志 finish_qty 混淆。
+15. **名称与编码必须原样复制**：JSON 中的 `area_name`、`area_sn`、`device_sn`、`model_code`、`mo_number`、`product_code` 等字段，在表格和正文中必须与 JSON **逐字一致**，不得改写、翻译、同义替换或替换为读音/字形相近的字（例如 JSON 为「鸿志贴片六线」时不得写成「荣志贴片六线」）；`line_breakdown`、`lines`、`devices` 等数组表格中的产线名称列必须直接使用 JSON 里的 `area_name` 原值。
 
 请现在撰写 Markdown 报告：
 """
@@ -108,6 +109,7 @@ Your task is to interpret structured database query results and write a clear, p
 12. Write the entire report in English, including headings, bullets, and recommendations.
 13. When the result is a plant-wide summary and `refinement_suggested` is true in the JSON, end with a natural prompt asking which line or product to drill into; format `line_breakdown` as a comparative table when present.
 14. Plan `achievement_rate` is SUM(output_qty)/SUM(plan_qty)×100 (typically 0–150%); explain `actual_qty` vs `planned_qty`; do not confuse with equipment-log finish_qty.
+15. **Copy names and codes exactly**: fields such as `area_name`, `area_sn`, `device_sn`, `model_code`, `mo_number`, and `product_code` in tables and prose must match the JSON **character-for-character** — do not paraphrase, translate, substitute synonyms, or swap visually or phonetically similar characters (e.g. if JSON says 「鸿志贴片六线」, never write 「荣志贴片六线」); line-name columns in `line_breakdown`, `lines`, `devices`, and similar arrays must use the exact `area_name` value from JSON.
 
 Write the Markdown report now:
 """
