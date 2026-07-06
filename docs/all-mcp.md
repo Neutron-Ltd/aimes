@@ -96,6 +96,7 @@ class BaseMCPTool(ABC):
 |------|-----------|--------|
 | 1 | `strip_domain_prefix()` + `resolve_module()` | Clean query + `assistant_module` (production, warehouse, …) |
 | 2 | `parse_intent()` — Bailian + [`orchestrator/prompts/intent.py`](../orchestrator/prompts/intent.py) | `IntentSchema` (intent enum + extracted entities) |
+| 2b | `apply_intent_corrections()` + `apply_colloquial_day_dates()` — [`orchestrator/intent_corrections.py`](../orchestrator/intent_corrections.py), [`core/reference_date.py`](../core/reference_date.py) | Reroute plan-attainment intents; resolve bare `N号` / `the Nth` to most recent past day |
 | 3 | Optional RAG | `retrieve_context()` for selected intents (Chroma/file by default) |
 | 4 | Special intents | `CROSS_MODULE_ANALYSIS`, `EXPORT_REPORT`, `UNKNOWN` — see §8 |
 | 5 | `validate_intent_params(intent, locale)` | Block dispatch if required entities missing (locale-aware messages) |
@@ -143,7 +144,8 @@ Frontend: [`frontend/src/api/chat.js`](../frontend/src/api/chat.js), [`frontend/
 |------|------|
 | [`orchestrator/param_mappers.py`](../orchestrator/param_mappers.py) | `IntentSchema` → tool-specific Pydantic params; date defaults use **`get_reference_today()`** (server local calendar date) when missing |
 | [`orchestrator/param_validation.py`](../orchestrator/param_validation.py) | Pre-dispatch checks — bilingual user-facing errors; **`YIELD_AGGREGATION` blocks `metric=achievement_rate`** (use `PRODUCTION_PLAN_ACHIEVEMENT`); plant-wide scope allowed for sum/avg |
-| [`core/reference_date.py`](../core/reference_date.py) | Single source of truth for “today” in intent prompts, param mappers, cross-module, and dashboards (`date.today()` on server clock) |
+| [`core/reference_date.py`](../core/reference_date.py) | `get_reference_today()`; `resolve_day_of_month()` for bare `N号`/`the Nth`; `apply_colloquial_day_dates()` after Bailian |
+| [`orchestrator/intent_corrections.py`](../orchestrator/intent_corrections.py) | Post-Bailian reroute: `达成率` + `各产线` → `PRODUCTION_PLAN_ACHIEVEMENT`, `line_id="all"` |
 
 **Yield type routing:** `_resolve_yield_type()` defaults to **`equipment`** unless intent sets `yield_type: "reported"`.
 
@@ -250,6 +252,8 @@ Legend:
 | `breakdown` | Time buckets when `group_by` is daily/weekly/monthly |
 
 **Example NL query:** 「今天各产线的达成率如何？」→ intent sets `line_id="all"`, single-day dates → returns all SMT lines with online MOs for that day; names come from `t_co_area.area_name` (e.g. `HZ-SMT-6` → 鸿志贴片六线).
+
+**Bare day example:** 「我要看20号各产线的达成率」on server date 2026-07-06 → post-correction sets `production_plan_achievement`, `line_id="all"`, dates `2026-06-20` (not future July 20).
 
 ---
 
@@ -449,6 +453,8 @@ line_id = null (equipment or reported)
 
 **System date anchoring:** Intent prompts, param mappers, cross-module analysis, and dashboard windows use **`get_reference_today()`** → server local **`date.today()`**. Colloquial dates like “今天” resolve against the API host calendar. Recommend `TZ=Asia/Shanghai` in Docker when operators expect China local time.
 
+**Bare day-of-month:** `resolve_day_of_month(N)` — if `N <= today's day` use current month, else previous month. Applied server-side via `apply_colloquial_day_dates()` when the user writes「20号」without a month. Example on 2026-07-06: 「我要看20号各产线的达成率」→ `start_date`/`end_date` = `2026-06-20`, intent corrected to `production_plan_achievement`, `line_id="all"`.
+
 **Data availability caveat:** MES PostgreSQL history currently ends around **2026-06-21** ([data-may-june.md](./data-may-june.md)). Queries for “today” after the last data day may return empty or zero results until live data catches up.
 
 ---
@@ -559,7 +565,8 @@ sequenceDiagram
 | Param validation | `orchestrator/param_validation.py` |
 | Router | `orchestrator/router.py` |
 | Intent prompt | `orchestrator/prompts/intent.py` |
-| Reference date | `core/reference_date.py` (`get_reference_today()` → `date.today()`) |
+| Reference date / bare-day | `core/reference_date.py` (`resolve_day_of_month`, `apply_colloquial_day_dates`) |
+| Intent post-correction | `orchestrator/intent_corrections.py` |
 | Synthesis prompt | `orchestrator/prompts/synthesis.py` |
 | Cross-module | `orchestrator/cross_module.py` |
 | Personas / greetings | `orchestrator/module_personas.py` |

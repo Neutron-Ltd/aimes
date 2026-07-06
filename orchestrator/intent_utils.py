@@ -15,7 +15,9 @@ from pydantic import ValidationError
 from core.bailian import bailian_credentials_configured
 from core.config import get_settings
 from core.logging import get_logger
+from core.reference_date import apply_colloquial_day_dates
 from models.schemas import BailianIntentExtraction, IntentSchema, IntentType, MCPContext
+from orchestrator.intent_corrections import apply_intent_corrections
 from orchestrator.intent_prompt import build_intent_prompt
 
 logger = get_logger(__name__)
@@ -163,7 +165,10 @@ async def parse_intent(
         sanitized = strip_markdown_json(output_text)
         payload = json.loads(sanitized)
         extracted = BailianIntentExtraction.model_validate(payload)
-        return map_extraction_to_intent_schema(extracted, normalized)
+        intent = map_extraction_to_intent_schema(extracted, normalized)
+        intent = apply_intent_corrections(intent)
+        intent = apply_colloquial_day_dates(intent)
+        return intent
 
     except json.JSONDecodeError as exc:
         return fallback_intent(normalized, f"Invalid JSON from Bailian: {exc}")

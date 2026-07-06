@@ -36,6 +36,10 @@ Voice queries (`POST /api/v1/query/voice`) transcribe audio first, then use the 
 
 **System date anchoring:** Intent prompts, param mappers, cross-module analysis, and dashboard windows use **`get_reference_today()`** → server local **`date.today()`**. Relative phrases like “今天”, “20号”, “last week” resolve against the API container’s calendar date. Set `TZ=Asia/Shanghai` in Docker if operators expect China local time on a UTC host.
 
+**Bare day-of-month (`N号` / `the Nth`):** After Bailian extraction, [`core/reference_date.py`](../core/reference_date.py) applies deterministic rules: if `N <= today's day` → current month; if `N > today's day` → previous month (e.g. on 2026-07-06, 「20号」→ `2026-06-20`; on 2026-07-21, 「20号」→ `2026-07-20`). Explicit months (`6月20号`) are not overridden.
+
+**Intent post-correction:** [`orchestrator/intent_corrections.py`](../orchestrator/intent_corrections.py) runs after Bailian in `parse_intent()` — reroutes misclassified plan-attainment queries (`达成率` + `各产线` → `PRODUCTION_PLAN_ACHIEVEMENT`, `line_id="all"`).
+
 ---
 
 ## 2. System time context block
@@ -46,10 +50,10 @@ Voice queries (`POST /api/v1/query/voice`) transcribe audio first, then use the 
 ### Chinese (`zh-CN`)
 
 ```
-当前系统时间上下文：年份为 {year}，今天日期为 {YYYY-MM-DD}。所有相对表达如「今天」「昨天」「上周」「上个月」或「20号」等，必须相对 {YYYY-MM-DD} 计算日期范围。
+当前系统时间上下文：年份为 {year}，今天日期为 {YYYY-MM-DD}。所有相对表达如「今天」「昨天」「上周」「上个月」或「20号」等，必须相对 {YYYY-MM-DD} 计算日期范围。仅写「N号」未写月份时：若 N ≤ 今天的日，指本月 N 号；若 N > 今天的日，指上月 N 号。
 ```
 
-*(Year and date come from `get_reference_today()` = server local calendar date.)*
+*(Year, date, and bare-day examples are dynamic from `get_reference_today()` and `resolve_day_of_month()`.)*
 
 ### English (`en-US`)
 
@@ -101,7 +105,8 @@ JSON 属性名必须保持英文，与下方规范完全一致。
 - 仅询问某产线产量/产出（非计划达成率）→ YIELD_AGGREGATION，metric=sum
 - 同时提及产线 + 产品型号/物料编码（产量）→ PRODUCTION_PRODUCT_YIELD
 - 询问全厂总产量或未指定产线（如「20号的产量」）→ YIELD_AGGREGATION，line_id 设为 null
-- 各产线计划达成率对比 → PRODUCTION_PLAN_ACHIEVEMENT，line_id="all"
+- 各产线计划达成率对比 / 达成率 + 各产线 → PRODUCTION_PLAN_ACHIEVEMENT，line_id="all"（无产品编码时切勿 PRODUCTION_PRODUCT_YIELD）
+- YIELD_AGGREGATION 禁止使用 metric=achievement_rate；计划达成率一律 PRODUCTION_PLAN_ACHIEVEMENT
 - 询问有几条产线、产线列表、工厂结构 → FACTORY_METADATA_LOOKUP
 - 提及工单号/MO → PRODUCTION_PLAN_ACHIEVEMENT，mo_number 填入工单号
 - 一周/一个月 → group_by 设为 weekly 或 monthly

@@ -52,7 +52,8 @@ _ROUTING_RULES_ZH = """
 - 仅询问某产线产量/产出（非计划达成率）→ YIELD_AGGREGATION，metric=sum
 - 同时提及产线 + 产品型号/物料编码（产量，非达成率）→ PRODUCTION_PRODUCT_YIELD
 - 询问全厂总产量或未指定产线（如「20号的产量」）→ YIELD_AGGREGATION，line_id 设为 null
-- 各产线计划达成率对比 → PRODUCTION_PLAN_ACHIEVEMENT，line_id="all"
+- 各产线计划达成率对比 / 达成率 + 各产线 → PRODUCTION_PLAN_ACHIEVEMENT，line_id="all"（无产品编码时切勿使用 PRODUCTION_PRODUCT_YIELD）
+- YIELD_AGGREGATION 禁止使用 metric=achievement_rate；计划达成率一律用 PRODUCTION_PLAN_ACHIEVEMENT
 - 询问有几条产线、产线列表、工厂结构 → FACTORY_METADATA_LOOKUP
 - 提及工单号/MO/项目号 → PRODUCTION_PLAN_ACHIEVEMENT，mo_number 填入工单号
 - 一周/一个月 → group_by 设为 weekly 或 monthly；单日 → daily 或 total
@@ -67,7 +68,8 @@ CRITICAL — intent routing rules:
 - Line output volume only (not plan attainment) → YIELD_AGGREGATION, metric=sum
 - Line AND product/model code (output volume, not attainment) → PRODUCTION_PRODUCT_YIELD
 - Plant-wide output with no line specified → YIELD_AGGREGATION, line_id null
-- All-line plan attainment comparison → PRODUCTION_PLAN_ACHIEVEMENT, line_id "all"
+- All-line plan attainment / achievement rate + all lines → PRODUCTION_PLAN_ACHIEVEMENT, line_id "all" (never PRODUCTION_PRODUCT_YIELD without product code)
+- metric=achievement_rate on YIELD_AGGREGATION is invalid; plan attainment always uses PRODUCTION_PLAN_ACHIEVEMENT
 - How many lines, line list, factory structure → FACTORY_METADATA_LOOKUP
 - Work order / MO / project number mentioned → PRODUCTION_PLAN_ACHIEVEMENT, set mo_number
 - Week or month time frame → group_by weekly or monthly; single day → daily or total

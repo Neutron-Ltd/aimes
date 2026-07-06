@@ -125,8 +125,9 @@ Structure is guided by persona prompts (e.g. "executive summary → metrics → 
 |------|--------|
 | MCP module | `mcp_tools/production_tools.py`, `mcp_tools/production_engines.py` |
 | **Integration status** | **✅** — 10 dedicated intents in `orchestrator/tool_registry.py` |
-| NL routing | User question → Bailian intent extraction → production intent → MCP tool → synthesis with production analyst persona |
+| NL routing | User question → Bailian intent extraction → post-correction (`intent_corrections`, `apply_colloquial_day_dates`) → production intent → MCP tool → synthesis with production analyst persona |
 | Example | 「今天各产线的达成率如何？」→ `PRODUCTION_PLAN_ACHIEVEMENT`, `line_id="all"`, single-day range → `get_plan_achievement_rate` → per-line `line_breakdown` from `t_pm_mo_base` + `t_co_area.area_name` |
+| Bare day example | 「我要看20号各产线的达成率」on 2026-07-06 → dates `2026-06-20` (previous month’s 20th), not future July 20 |
 
 | Intent / tool | PostgreSQL tables |
 |---------------|-------------------|
