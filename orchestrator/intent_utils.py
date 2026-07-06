@@ -119,6 +119,7 @@ def map_extraction_to_intent_schema(
         doc_type=_normalize_optional_str(extracted.doc_type),
         wh_code=_normalize_optional_str(extracted.wh_code),
         item_code=_normalize_optional_str(extracted.item_code),
+        mo_number=_normalize_optional_str(extracted.mo_number),
         confidence=0.9,
         raw_query=raw_query,
     )

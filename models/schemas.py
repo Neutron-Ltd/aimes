@@ -30,6 +30,7 @@ class IntentType(str, Enum):
     PRODUCTION_PRODUCT_YIELD = "production_product_yield"
     PRODUCTION_DEVICE_RATE = "production_device_rate"
     PRODUCTION_STANDARD_TIME = "production_standard_time"
+    PRODUCTION_PLAN_ACHIEVEMENT = "production_plan_achievement"
     FACTORY_METADATA_LOOKUP = "factory_metadata_lookup"
 
     # Quality (Phase 3)
@@ -68,6 +69,7 @@ class IntentSchema(BaseModel):
     finished_lot: Optional[str] = None
     process_code: Optional[str] = None
     line_id: Optional[str] = None
+    mo_number: Optional[str] = None
     yield_type: Optional[str] = Field(
         default=None,
         description="equipment or reported — null when not stated by user",
@@ -98,6 +100,7 @@ class BailianIntentExtraction(BaseModel):
     intent: str
     yield_type: Optional[str] = None
     line_id: Optional[str] = None
+    mo_number: Optional[str] = None
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     group_by: Optional[str] = None

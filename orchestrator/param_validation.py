@@ -90,6 +90,24 @@ _MESSAGES: dict[str, dict[str, str]] = {
             "to trace in reverse."
         ),
     },
+    "plan_achievement_scope": {
+        "zh-CN": (
+            "无法执行计划达成率分析：请指定日期范围，并至少提供产线、工单号或产品型号之一。"
+        ),
+        "en-US": (
+            "Could not execute plan attainment analysis: Please specify a date range "
+            "and at least one of line, work order (MO), or product code."
+        ),
+    },
+    "achievement_rate_deprecated": {
+        "zh-CN": (
+            "设备日志达成率已停用。计划达成率请询问「计划达成率」或指定产线/工单/产品的达成情况。"
+        ),
+        "en-US": (
+            "Equipment-log achievement rate is deprecated. For plan attainment, ask "
+            "about plan achievement rate with a line, work order, or product."
+        ),
+    },
 }
 
 
@@ -192,8 +210,15 @@ def _yield_scope_required(intent: IntentSchema, locale: str) -> Optional[str]:
     return _device_or_line(intent, locale)
 
 
-def _yield_aggregation_allowed(_intent: IntentSchema, _locale: str) -> Optional[str]:
+def _yield_aggregation_allowed(intent: IntentSchema, locale: str) -> Optional[str]:
     """Plant-wide and all-line aggregation allowed without entity constraints."""
+    if intent.metric == "achievement_rate":
+        return _msg("achievement_rate_deprecated", locale)
+    return None
+
+
+def _plan_achievement_allowed(_intent: IntentSchema, _locale: str) -> Optional[str]:
+    """Plant-wide plan attainment allowed; dates default via mapper."""
     return None
 
 
@@ -207,6 +232,7 @@ INTENT_VALIDATORS: dict[IntentType, Callable[[IntentSchema, str], Optional[str]]
     IntentType.PRODUCTION_ROOT_CAUSE: _line_required,
     IntentType.PRODUCTION_SCHEDULING_OPT: _line_required,
     IntentType.PRODUCTION_CAPACITY_FORECAST: _line_required,
+    IntentType.PRODUCTION_PLAN_ACHIEVEMENT: _plan_achievement_allowed,
     IntentType.QUALITY_ERROR_PREVENTION: _process_code_required,
     IntentType.QUALITY_EFFECTIVENESS_VERIFY: _milestone_date_required,
     IntentType.WAREHOUSE_INBOUND_OUTBOUND: _warehouse_inbound,

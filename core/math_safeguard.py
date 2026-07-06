@@ -27,6 +27,18 @@ def population_std_dev(values: Sequence[float]) -> float:
     return math.sqrt(variance)
 
 
+def plan_achievement_rate(actual: float, planned: float) -> float:
+    """
+    Plan attainment: (actual / planned) * 100.
+
+    Returns 0.0 when planned quantity is zero. Values above 100% are allowed
+    when actual output exceeds plan.
+    """
+    if planned == 0:
+        return 0.0
+    return (actual / planned) * 100.0
+
+
 def period_over_period_growth_rate(
     current: float, past: float
 ) -> Optional[float]:

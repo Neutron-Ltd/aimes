@@ -25,19 +25,15 @@ from models.dashboard import (
     DashboardKpiSlot,
     DataSource,
 )
-from models.intents.production import DeviceRateParams
+from core.math_safeguard import period_over_period_growth_rate
+from models.intents.production import DeviceRateParams, PlanAchievementParams
 from models.schemas import MCPContext
 from mcp_tools.production_tools import (
     AnalysisType,
-    CompareYieldPeriodsParams,
-    GroupBy,
-    Metric,
-    YieldAggregationParams,
     YieldAnomaliesParams,
     YieldType,
-    compare_yield_periods_tool,
     get_device_production_rate_tool,
-    get_yield_aggregation_tool,
+    get_plan_achievement_rate_tool,
     get_yield_anomalies_tool,
 )
 
@@ -133,38 +129,32 @@ class EquipmentDashboardBuilder:
         start, end = resolve_date_range(lookback_days)
         prev_start, prev_end = previous_period(start, end)
 
-        achievement_total = await get_yield_aggregation_tool.run(
-            YieldAggregationParams(
-                yield_type=YieldType.EQUIPMENT,
+        achievement_total = await get_plan_achievement_rate_tool.run(
+            PlanAchievementParams(
                 line_id=line_id,
                 start_date=start,
                 end_date=end,
-                group_by=GroupBy.TOTAL,
-                metric=Metric.ACHIEVEMENT_RATE,
+                group_by="total",
             ),
             context,
             session=session,
         )
-        achievement_daily = await get_yield_aggregation_tool.run(
-            YieldAggregationParams(
-                yield_type=YieldType.EQUIPMENT,
+        achievement_daily = await get_plan_achievement_rate_tool.run(
+            PlanAchievementParams(
                 line_id=line_id,
                 start_date=start,
                 end_date=end,
-                group_by=GroupBy.DAILY,
-                metric=Metric.ACHIEVEMENT_RATE,
+                group_by="daily",
             ),
             context,
             session=session,
         )
-        achievement_prev = await compare_yield_periods_tool.run(
-            CompareYieldPeriodsParams(
-                yield_type=YieldType.EQUIPMENT,
+        achievement_prev = await get_plan_achievement_rate_tool.run(
+            PlanAchievementParams(
                 line_id=line_id,
-                period_1_start=prev_start,
-                period_1_end=prev_end,
-                period_2_start=start,
-                period_2_end=end,
+                start_date=prev_start,
+                end_date=prev_end,
+                group_by="total",
             ),
             context,
             session=session,
@@ -225,12 +215,17 @@ class EquipmentDashboardBuilder:
 
         ach_data = tool_data(achievement_total)
         prev_data = tool_data(achievement_prev)
-        if ach_data and ach_data.get("value") is not None:
-            rate = self._normalize_rate(float(ach_data["value"]))
+        if ach_data and ach_data.get("achievement_rate") is not None:
+            rate = self._normalize_rate(float(ach_data["achievement_rate"]))
             trend = None
-            if prev_data and prev_data.get("growth_rate") is not None:
-                trend = format_trend(float(prev_data["growth_rate"]))
-            if rate > 0:
+            if prev_data and prev_data.get("achievement_rate") is not None:
+                growth = period_over_period_growth_rate(
+                    float(ach_data["achievement_rate"]),
+                    float(prev_data["achievement_rate"]),
+                )
+                if growth is not None:
+                    trend = format_trend(growth)
+            if rate > 0 or float(ach_data.get("planned_qty") or 0) > 0:
                 kpis.append(
                     DashboardKpiSlot(
                         index=0,
@@ -286,7 +281,13 @@ class EquipmentDashboardBuilder:
                         bucket_label(row.get("bucket"), locale) for row in breakdown
                     ],
                     series=[
-                        self._normalize_rate(float(row.get("value") or 0))
+                        self._normalize_rate(
+                            float(
+                                row.get("achievement_rate")
+                                or row.get("value")
+                                or 0
+                            )
+                        )
                         for row in breakdown
                     ],
                     source=DataSource.LIVE,

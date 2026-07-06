@@ -102,7 +102,7 @@ Structure is guided by persona prompts (e.g. "executive summary → metrics → 
 
 | KPI (zh / en) | Tables | Fetch logic | Status |
 |---------------|--------|-------------|--------|
-| 计划达成率 / Plan Attainment | `t_smt_program_consumption_record`, `t_co_device` | `get_yield_aggregation` — equipment achievement rate | ✅ |
+| 计划达成率 / Plan Attainment | `t_pm_mo_base`, `t_pm_mo_online`, `t_pm_mo_online_log` | `get_plan_achievement_rate` — SUM(output_qty)/SUM(plan_qty)×100 | ✅ |
 | 设备稼动率 / Equipment Utilization | `t_smt_program_consumption_record`, `t_co_device` | `get_device_production_rate` — avg output per device | ✅ |
 | 在制工单 / WIP Orders | — | No work-order count tool wired | ❌ |
 
@@ -110,7 +110,7 @@ Structure is guided by persona prompts (e.g. "executive summary → metrics → 
 
 | # | Chart (zh / en) | Type | Tables | Fetch logic | Status |
 |---|-----------------|------|--------|-------------|--------|
-| 0 | 产线达成趋势 / Line Attainment Trend | line | `t_smt_program_consumption_record`, `t_co_device` | `get_yield_aggregation` — daily achievement breakdown | ✅ |
+| 0 | 产线达成趋势 / Line Attainment Trend | line | `t_pm_mo_base`, `t_pm_mo_online_log` | `get_plan_achievement_rate` — daily plan attainment breakdown | ✅ |
 | 1 | 工单状态分布 / Work Order Status | bar | — | No work-order status aggregation tool | ❌ |
 | 2 | 产能负荷 / Capacity Load | gauge | `t_smt_program_consumption_record`, `t_co_device`, `t_co_standard_time` | `forecast_capacity_hr` — utilization % vs standard time | ✅ |
 | 3 | 产线负荷对比 / Line Load Comparison | bar | `t_smt_program_consumption_record`, `t_co_device` | `get_device_production_rate` — top 5 devices by avg rate | ✅ |
@@ -122,12 +122,13 @@ Structure is guided by persona prompts (e.g. "executive summary → metrics → 
 | Item | Detail |
 |------|--------|
 | MCP module | `mcp_tools/production_tools.py`, `mcp_tools/production_engines.py` |
-| **Integration status** | **✅** — 9 dedicated intents in `orchestrator/tool_registry.py` |
+| **Integration status** | **✅** — 10 dedicated intents in `orchestrator/tool_registry.py` |
 | NL routing | User question → Bailian intent extraction → production intent → MCP tool → synthesis with production analyst persona |
 
 | Intent / tool | PostgreSQL tables |
 |---------------|-------------------|
 | `get_yield_aggregation` | `t_smt_program_consumption_record`, `t_co_device` |
+| `get_plan_achievement_rate` | `t_pm_mo_base`, `t_pm_project_base`, `t_pm_mo_online`, `t_pm_mo_online_log` |
 | `get_yield_anomalies_and_peaks` | `t_smt_program_consumption_record`, `t_co_device` |
 | `compare_yield_periods` | `t_smt_program_consumption_record`, `t_co_device` |
 | `get_product_yield` | `t_smt_program_consumption_record`, `t_co_device`, `t_co_item` |
@@ -263,7 +264,7 @@ Equipment dashboard reuses **production MCP tools** with `yield_type=equipment`,
 
 | KPI (zh / en) | Tables | Fetch logic | Status |
 |---------------|--------|-------------|--------|
-| 设备健康度 / Equipment Health | `t_smt_program_consumption_record`, `t_co_device` | `get_yield_aggregation` (equipment achievement) + `compare_yield_periods` trend | ✅ |
+| 设备健康度 / Equipment Health | `t_pm_mo_base`, `t_pm_mo_online_log` | `get_plan_achievement_rate` (plan attainment) + prior-period comparison | ✅ |
 | 预测告警 / Predicted Alerts | `t_smt_program_consumption_record`, `t_co_device` | `get_yield_anomalies` — below_standard bucket count | ✅ |
 | 平均停机 / Avg. Downtime | — | No downtime duration table in MES schema | ❌ |
 
@@ -271,7 +272,7 @@ Equipment dashboard reuses **production MCP tools** with `yield_type=equipment`,
 
 | # | Chart (zh / en) | Type | Tables | Fetch logic | Status |
 |---|-----------------|------|--------|-------------|--------|
-| 0 | 设备健康趋势 / Equipment Health Trend | line | `t_smt_program_consumption_record`, `t_co_device` | `get_yield_aggregation` — daily equipment achievement | ✅ |
+| 0 | 设备健康趋势 / Equipment Health Trend | line | `t_pm_mo_base`, `t_pm_mo_online_log` | `get_plan_achievement_rate` — daily plan attainment | ✅ |
 | 1 | 告警等级分布 / Alert Level Distribution | bar | — | No alert severity taxonomy in DB | ❌ |
 | 2 | 维护完成率 / Maintenance Completion | gauge | `t_co_device` | SQL `_fetch_device_registry_summary` — valid `expire_date` / registered devices | ✅ |
 | 3 | 停机时长分析 / Downtime by Equipment | bar | `t_smt_program_consumption_record`, `t_co_device` | `get_device_production_rate` — inverse rate as downtime proxy | ✅ |

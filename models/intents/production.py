@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -81,3 +81,27 @@ class CapacityForecastResult(BaseModel):
     capacity_utilization: float
     overtime_hours_estimate: float
     personnel_gap: int
+
+
+class PlanAchievementParams(BaseModel):
+    line_id: Optional[str] = None
+    mo_number: Optional[str] = None
+    product_code: Optional[str] = None
+    start_date: datetime
+    end_date: datetime
+    group_by: Literal["daily", "weekly", "monthly", "total"] = "total"
+
+
+class PlanAchievementResult(BaseModel):
+    achievement_rate: float
+    actual_qty: float
+    planned_qty: float
+    line_id: Optional[str] = None
+    mo_number: Optional[str] = None
+    product_code: Optional[str] = None
+    group_by: str
+    data_source: Literal["mo_base", "project_base"]
+    breakdown: list[dict[str, Any]] = Field(default_factory=list)
+    line_breakdown: list[dict[str, Any]] = Field(default_factory=list)
+    scope: Literal["line", "plant", "all_lines"] = "line"
+    refinement_suggested: bool = False

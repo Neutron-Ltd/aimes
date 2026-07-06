@@ -61,6 +61,8 @@ _METRIC_LABELS = {
 _GROUP_BY_LABELS = {
     "daily": "By Day",
     "hourly": "By Hour",
+    "weekly": "By Week",
+    "monthly": "By Month",
     "total": "Full Period Total",
 }
 
@@ -87,7 +89,11 @@ _FIELD_LABELS: dict[str, str] = {
     "total_inspected": "Units Inspected",
     "total_defects": "Defective Units",
     "achievement_pct": "Standard Time Achievement",
+    "achievement_rate": "Plan Achievement Rate",
     "actual_qty": "Actual Output",
+    "planned_qty": "Planned Quantity",
+    "mo_number": "Work Order",
+    "data_source": "Data Source Table",
     "standard_time": "Standard Time Target",
     "elapsed_hours": "Elapsed Production Hours",
     "capacity_utilization": "Capacity Utilization",
@@ -120,7 +126,11 @@ _FIELD_LABELS_ZH: dict[str, str] = {
     "total_inspected": "检验数量",
     "total_defects": "不良数量",
     "achievement_pct": "标准工时达成率",
+    "achievement_rate": "计划达成率",
     "actual_qty": "实际产量",
+    "planned_qty": "计划数量",
+    "mo_number": "工单号",
+    "data_source": "数据来源表",
     "standard_time": "标准工时目标",
     "elapsed_hours": "生产耗时（小时）",
     "capacity_utilization": "产能利用率",
@@ -150,6 +160,8 @@ _METRIC_LABELS_ZH = {
 _GROUP_BY_LABELS_ZH = {
     "daily": "按日",
     "hourly": "按小时",
+    "weekly": "按周",
+    "monthly": "按月",
     "total": "全时段合计",
 }
 
@@ -248,7 +260,7 @@ def _translate_scalar(
         return _ANALYSIS_TYPE_LABELS.get(value.lower(), value.replace("_", " ").title())
     if key == "device_sn" and value:
         return f"设备 {value}" if zh else f"Machine {value}"
-    if key in ("growth_rate", "defect_rate", "achievement_pct", "capacity_utilization"):
+    if key in ("growth_rate", "defect_rate", "achievement_pct", "achievement_rate", "capacity_utilization"):
         if isinstance(value, (int, float)):
             return f"{value:,.2f}%"
     if key == "value":
@@ -287,9 +299,15 @@ def _rows_from_breakdown(
         period = item.get("bucket") or item.get("date") or "—"
         period_label = _format_period_label(period)
         qty = item.get("value")
-        if qty is None:
+        if qty is None and item.get("achievement_rate") is not None:
+            qty_display = f"{_format_number(item['achievement_rate'], locale)}%"
+        elif qty is None:
             qty = item.get("good_qty", item.get("qty", "—"))
-        if isinstance(qty, (int, float)):
+            if isinstance(qty, (int, float)):
+                qty_display = f"{_format_number(qty, locale)} {unit}"
+            else:
+                qty_display = str(qty)
+        elif isinstance(qty, (int, float)):
             qty_display = f"{_format_number(qty, locale)} {unit}"
         else:
             qty_display = str(qty)
@@ -304,9 +322,12 @@ def _rows_from_line_breakdown(
     unit = _unit_suffix(locale)
     for item in items:
         name = item.get("area_name") or item.get("area_sn") or "—"
-        value = item.get("value", "—")
-        if isinstance(value, (int, float)):
-            value = f"{_format_number(value, locale)} {unit}"
+        if item.get("achievement_rate") is not None:
+            value = f"{_format_number(item['achievement_rate'], locale)}%"
+        else:
+            value = item.get("value", "—")
+            if isinstance(value, (int, float)):
+                value = f"{_format_number(value, locale)} {unit}"
         rows.append((str(name), str(value)))
     return rows
 
@@ -579,7 +600,7 @@ def _fallback_markdown_report(
 
     section_titles_zh = {
         "breakdown": "产量趋势",
-        "line_breakdown": "各产线产量对比",
+        "line_breakdown": "各产线计划达成率对比",
         "lines": "产线结构",
         "devices": "设备绩效",
         "hypotheses": "质量根因假设",

@@ -28,6 +28,7 @@ from mcp_tools.production_tools import (
 from models.intents.production import (
     CapacityForecastParams,
     DeviceRateParams,
+    PlanAchievementParams,
     ProductYieldParams,
     RootCauseParams,
     SchedulingParams,
@@ -46,7 +47,7 @@ from models.intents.warehouse import (
     TraceForwardParams,
     TraceReverseParams,
 )
-from models.schemas import IntentSchema, IntentType
+from models.schemas import IntentSchema, IntentType, TimeFrame
 
 
 def _start_of_day(d: date) -> datetime:
@@ -94,6 +95,30 @@ def _line_scope(intent: IntentSchema) -> Optional[str]:
     if cleaned and cleaned.lower() == "all":
         return "all"
     return cleaned
+
+
+def _plan_group_by(intent: IntentSchema) -> str:
+    if intent.group_by in ("daily", "weekly", "monthly", "total"):
+        return intent.group_by
+    if intent.time_frame == TimeFrame.DAY:
+        return "daily"
+    if intent.time_frame == TimeFrame.WEEK:
+        return "weekly"
+    if intent.time_frame == TimeFrame.MONTH:
+        return "monthly"
+    return "total"
+
+
+def intent_to_plan_achievement_params(intent: IntentSchema) -> PlanAchievementParams:
+    start, end = _date_range(intent)
+    return PlanAchievementParams(
+        line_id=_line_scope(intent),
+        mo_number=_strip(intent.mo_number),
+        product_code=_strip(intent.product_code) or _strip(intent.model_code),
+        start_date=_start_of_day(start),
+        end_date=_end_of_day(end),
+        group_by=_plan_group_by(intent),
+    )
 
 
 def intent_to_factory_metadata_params(_intent: IntentSchema) -> FactoryMetadataParams:
@@ -266,6 +291,7 @@ PARAM_MAPPERS = {
     IntentType.PRODUCTION_ROOT_CAUSE: intent_to_root_cause_params,
     IntentType.PRODUCTION_SCHEDULING_OPT: intent_to_scheduling_params,
     IntentType.PRODUCTION_CAPACITY_FORECAST: intent_to_capacity_params,
+    IntentType.PRODUCTION_PLAN_ACHIEVEMENT: intent_to_plan_achievement_params,
     IntentType.FACTORY_METADATA_LOOKUP: intent_to_factory_metadata_params,
     IntentType.QUALITY_DEFECT_ANALYSIS: intent_to_defect_params,
     IntentType.QUALITY_ROOT_CAUSE: intent_to_quality_root_cause_params,

@@ -23,7 +23,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.line_scope import equipment_scope_filter, reported_line_filter
 from core.logging import get_logger
 from core.math_safeguard import period_over_period_growth_rate, population_std_dev
+from core.analytics.plan_achievement import (
+    aggregate_plan_achievement,
+    build_line_breakdown,
+    fetch_plan_achievement_rows,
+)
 from mcp_tools.base import BaseMCPTool, optional_session
+from models.intents.production import PlanAchievementParams, PlanAchievementResult
 from models.schemas import MCPContext
 
 logger = get_logger(__name__)
@@ -476,6 +482,11 @@ class GetYieldAggregationTool(BaseMCPTool[YieldAggregationParams, YieldAggregati
         *,
         session: AsyncSession | None = None,
     ) -> YieldAggregationResult:
+        if params.metric == Metric.ACHIEVEMENT_RATE:
+            raise ValueError(
+                "metric=achievement_rate uses plan attainment; "
+                "route to PRODUCTION_PLAN_ACHIEVEMENT / get_plan_achievement_rate"
+            )
         async with optional_session(session) as db:
             scope: Literal["line", "plant", "all_lines"] = "line"
             refinement_suggested = False
@@ -884,6 +895,79 @@ class GetFactoryStructureMetadataTool(
             return FactoryMetadataResult(line_count=len(lines), lines=lines)
 
 
+# ---------------------------------------------------------------------------
+# Tool: get_plan_achievement_rate
+# ---------------------------------------------------------------------------
+
+
+class GetPlanAchievementRateTool(
+    BaseMCPTool[PlanAchievementParams, PlanAchievementResult]
+):
+    name = "get_plan_achievement_rate"
+    description = (
+        "Plan-based attainment rate: SUM(output_qty) / SUM(plan_qty) * 100 "
+        "from PM tables with online-order filtering."
+    )
+
+    async def execute(
+        self,
+        params: PlanAchievementParams,
+        context: MCPContext,
+        *,
+        session: AsyncSession | None = None,
+    ) -> PlanAchievementResult:
+        _ = context
+        async with optional_session(session) as db:
+            all_lines = _is_all_lines(params.line_id)
+            scope: Literal["line", "plant", "all_lines"] = "line"
+            refinement_suggested = False
+            line_breakdown: list[dict[str, Any]] = []
+
+            rows, data_source = await fetch_plan_achievement_rows(
+                db,
+                mo_number=params.mo_number,
+                line_id=params.line_id,
+                product_code=params.product_code,
+                start_date=params.start_date,
+                end_date=params.end_date,
+                group_by=params.group_by,
+            )
+
+            if all_lines and params.group_by == "total":
+                scope = "all_lines"
+                line_breakdown = build_line_breakdown(rows)
+                rate, actual, planned, breakdown = aggregate_plan_achievement(
+                    rows, "total"
+                )
+            else:
+                rate, actual, planned, breakdown = aggregate_plan_achievement(
+                    rows, params.group_by
+                )
+                if (
+                    params.line_id is None
+                    and params.mo_number is None
+                    and params.product_code is None
+                    and params.group_by == "total"
+                ):
+                    scope = "plant"
+                    refinement_suggested = actual > 0 or planned > 0
+
+            return PlanAchievementResult(
+                achievement_rate=rate,
+                actual_qty=round(actual, 4),
+                planned_qty=round(planned, 4),
+                line_id=params.line_id,
+                mo_number=params.mo_number,
+                product_code=params.product_code,
+                group_by=params.group_by,
+                data_source=data_source,
+                breakdown=breakdown,
+                line_breakdown=line_breakdown,
+                scope=scope,
+                refinement_suggested=refinement_suggested,
+            )
+
+
 # Singleton instances for orchestrator registration
 get_yield_aggregation_tool = GetYieldAggregationTool()
 get_yield_anomalies_tool = GetYieldAnomaliesAndPeaksTool()
@@ -892,3 +976,4 @@ get_product_yield_tool = GetProductYieldTool()
 get_device_production_rate_tool = GetDeviceProductionRateTool()
 get_standard_time_achievement_tool = GetStandardTimeAchievementTool()
 get_factory_structure_metadata_tool = GetFactoryStructureMetadataTool()
+get_plan_achievement_rate_tool = GetPlanAchievementRateTool()

@@ -98,7 +98,7 @@ class BaseMCPTool(ABC):
 | 2 | `parse_intent()` — Bailian + [`orchestrator/prompts/intent.py`](../orchestrator/prompts/intent.py) | `IntentSchema` (intent enum + extracted entities) |
 | 3 | Optional RAG | `retrieve_context()` for selected intents (Chroma/file by default) |
 | 4 | Special intents | `CROSS_MODULE_ANALYSIS`, `EXPORT_REPORT`, `UNKNOWN` — see §8 |
-| 5 | `validate_intent_params()` | Block dispatch if required entities missing |
+| 5 | `validate_intent_params(intent, locale)` | Block dispatch if required entities missing (locale-aware messages) |
 | 6 | `get_tool_for_intent()` + `param_mappers` | Map intent → tool params |
 | 7 | `tool.run(params, context)` | `MCPToolResult` with JSON `data` |
 | 8 | `generate_ai_analysis()` | Markdown report using **module persona** |
@@ -116,7 +116,7 @@ class BaseMCPTool(ABC):
 
 | Domain | IntentType values | Count |
 |--------|-------------------|-------|
-| Production | `YIELD_AGGREGATION`, `YIELD_ANOMALIES`, `YIELD_COMPARISON`, `PRODUCTION_PRODUCT_YIELD`, `PRODUCTION_DEVICE_RATE`, `PRODUCTION_STANDARD_TIME`, `PRODUCTION_ROOT_CAUSE`, `PRODUCTION_SCHEDULING_OPT`, `PRODUCTION_CAPACITY_FORECAST` | 9 |
+| Production | `YIELD_AGGREGATION`, `YIELD_ANOMALIES`, `YIELD_COMPARISON`, `PRODUCTION_PRODUCT_YIELD`, `PRODUCTION_DEVICE_RATE`, `PRODUCTION_STANDARD_TIME`, `PRODUCTION_PLAN_ACHIEVEMENT`, `PRODUCTION_ROOT_CAUSE`, `PRODUCTION_SCHEDULING_OPT`, `PRODUCTION_CAPACITY_FORECAST`, `FACTORY_METADATA_LOOKUP` | 11 |
 | Quality | `QUALITY_DEFECT_ANALYSIS`, `QUALITY_ROOT_CAUSE`, `QUALITY_ERROR_PREVENTION`, `QUALITY_EFFECTIVENESS_VERIFY` | 4 |
 | Warehouse | `WAREHOUSE_INVENTORY_MONITOR`, `WAREHOUSE_INBOUND_OUTBOUND`, `WAREHOUSE_OBSOLETE_PROFILE`, `WAREHOUSE_TRACE_FORWARD`, `WAREHOUSE_TRACE_REVERSE` | 5 |
 | System | `EXPORT_REPORT`, `CROSS_MODULE_ANALYSIS`, `VOICE_QUERY`, `UNKNOWN` | — |
@@ -131,15 +131,26 @@ class BaseMCPTool(ABC):
 
 | File | Role |
 |------|------|
-| [`orchestrator/param_mappers.py`](../orchestrator/param_mappers.py) | `IntentSchema` → tool-specific Pydantic params; date defaults (e.g. today if missing) |
-| [`orchestrator/param_validation.py`](../orchestrator/param_validation.py) | Pre-dispatch checks — returns user-facing error if `line_id`, `product_code`, etc. missing |
+| [`orchestrator/param_mappers.py`](../orchestrator/param_mappers.py) | `IntentSchema` → tool-specific Pydantic params; date defaults use **`dashboard_reference_date`** (default `2026-06-21`) when missing |
+| [`orchestrator/param_validation.py`](../orchestrator/param_validation.py) | Pre-dispatch checks — bilingual user-facing errors; **`YIELD_AGGREGATION` blocks `metric=achievement_rate`** (use `PRODUCTION_PLAN_ACHIEVEMENT`); plant-wide scope allowed for sum/avg |
+| [`core/reference_date.py`](../core/reference_date.py) | Single source of truth for anchored “today” in intent prompts and param mappers |
 
 **Yield type routing:** `_resolve_yield_type()` defaults to **`equipment`** unless intent sets `yield_type: "reported"`.
 
 | `yield_type` | Data source | Scope filter |
 |--------------|-------------|--------------|
-| `equipment` | `t_smt_program_consumption_record` | `device_sn` or devices where `t_co_device.cd_location = line_id` |
-| `reported` | `t_wip_detail` JOIN `t_co_area` | `line.area_sn = line_id` (via workstation hierarchy) |
+| `equipment` | `t_smt_program_consumption_record` | `device_sn` **or** `eq.area_sn` (+ Chinese `area_name` lookup via `t_co_area`) |
+| `reported` | `t_wip_detail` JOIN `t_co_area` | `line.area_sn` or `line.area_name = line_id` (via workstation hierarchy) |
+
+**Global scoping tokens:**
+
+| `line_id` value | Behavior (`get_yield_aggregation`) |
+|-----------------|--------------------------------------|
+| `null` / omitted | Plant-wide aggregate (`scope: "plant"`); sets `refinement_suggested: true` when value > 0 |
+| `"all"` | Per-line comparative matrix (`scope: "all_lines"`) — `GROUP BY area_sn` on transactional tables |
+| Specific code/name | Single-line filter (e.g. `FDQ-SMT-6`, `防盗器贴片六线`) |
+
+**Intent routing (LLM prompt rules):** Plan attainment / 达成率 → `PRODUCTION_PLAN_ACHIEVEMENT`; equipment output volume → `YIELD_AGGREGATION` (sum/avg only); line + product output → `PRODUCTION_PRODUCT_YIELD`; factory structure → `FACTORY_METADATA_LOOKUP`. See [all-prompt.md](./all-prompt.md) and [pm-plan-tables.md](./pm-plan-tables.md).
 
 ### 4.4 RAG-enriched intents
 
@@ -183,31 +194,33 @@ Legend:
 
 **MCP files:** [`mcp_tools/production_tools.py`](../mcp_tools/production_tools.py), [`mcp_tools/production_engines.py`](../mcp_tools/production_engines.py), [`core/analytics/`](../core/analytics/)
 
-**Chat status:** ✅ 9 intents registered  
+**Chat status:** ✅ 10 intents registered  
 **Dashboard:** ⚡ 6 MCP calls + 🔧 1 custom SQL (`_fetch_monthly_defect_counts`)
 
 #### Tools (chat + details)
 
 | Intent | Tool name | Tables | Logic summary |
 |--------|-----------|--------|-----------------|
-| `YIELD_AGGREGATION` | `get_yield_aggregation` | `t_smt_program_consumption_record`, `t_co_device` OR `t_wip_detail`, `t_co_area` | Route by `yield_type`; group by daily/hourly/total; metrics sum/avg/achievement_rate; Python aggregation |
-| `YIELD_ANOMALIES` | `get_yield_anomalies_and_peaks` | Same as aggregation | Hourly series → volatility (std dev), below_standard buckets (default 90% threshold), or peak hourly |
-| `YIELD_COMPARISON` | `compare_yield_periods` | Same | Two period totals + Python growth rate |
-| `PRODUCTION_PRODUCT_YIELD` | `get_product_yield` | `t_wip_detail`, `t_co_area`, `t_co_item` | Daily good qty per `product_code` on line; requires line + product |
-| `PRODUCTION_DEVICE_RATE` | `get_device_production_rate` | `t_smt_program_consumption_record`, `t_co_device` | AVG/SUM `finish_qty` grouped by device; filter by line or device_sn |
+| `YIELD_AGGREGATION` | `get_yield_aggregation` | `t_smt_program_consumption_record`, `t_wip_detail`, `t_co_area` | Route by `yield_type`; group by daily/hourly/total; metrics **sum/avg only** (`achievement_rate` deprecated — use plan tool); plant-wide / all-lines / single-line |
+| `PRODUCTION_PLAN_ACHIEVEMENT` | `get_plan_achievement_rate` | `t_pm_mo_base`, `t_pm_project_base`, `t_pm_mo_online`, `t_pm_mo_online_log`, `t_co_area` | **达成率 = SUM(output_qty)/SUM(plan_qty)×100**; online-order filter; `mo_number` → `project_base`; `line_id="all"` matrix; group by daily/weekly/monthly/total — see [pm-plan-tables.md](./pm-plan-tables.md) |
+| `YIELD_ANOMALIES` | `get_yield_anomalies_and_peaks` | Same as aggregation | Hourly series → volatility (std dev), below_standard buckets (default 90% threshold), or peak hourly; requires line, device, or `"all"` |
+| `YIELD_COMPARISON` | `compare_yield_periods` | Same | Two period totals + Python growth rate; requires line, device, or `"all"` |
+| `PRODUCTION_PRODUCT_YIELD` | `get_product_yield` | `t_wip_detail`, `t_co_area`, `t_co_item` | Daily good qty per `product_code` on line; validation requires line + product |
+| `PRODUCTION_DEVICE_RATE` | `get_device_production_rate` | `t_smt_program_consumption_record`, `t_co_device` | AVG/SUM `finish_qty` grouped by device; filter by `eq.area_sn` or device_sn; `t_co_device` join for names only |
 | `PRODUCTION_STANDARD_TIME` | `get_standard_time_achievement` | `t_smt_program_consumption_record`, `t_co_standard_time` | Actual vs standard time achievement % for model on line |
 | `PRODUCTION_ROOT_CAUSE` | `get_production_root_cause` | `t_wip_detail`, `t_co_area`, `t_co_device`, consumption | [`analyze_root_cause()`](../core/analytics/root_cause.py) — correlate low hourly WIP with lot/operator/device |
 | `PRODUCTION_SCHEDULING_OPT` | `optimize_production_schedule` | `t_aps_plan_mo_info` | [`optimize_schedule()`](../core/analytics/scheduling.py) — heuristic priority scores on upcoming MOs (**note:** SQL does not filter by `line_id` today) |
 | `PRODUCTION_CAPACITY_FORECAST` | `forecast_capacity_hr` | `t_smt_program_consumption_record`, `t_co_device` | [`forecast_capacity()`](../core/analytics/capacity.py) — 30-day throughput → utilization / overtime / personnel gap |
+| `FACTORY_METADATA_LOOKUP` | `get_factory_structure_metadata` | `t_co_area` | `SELECT DISTINCT area_sn, area_name` — line count and factory structure; **no required params** |
 
 #### Dashboard MCP usage ([`core/dashboard/production.py`](../core/dashboard/production.py))
 
 | Chart/KPI slot | Source | Status |
 |----------------|--------|--------|
-| KPI plan attainment | ⚡ `get_yield_aggregation` (total, achievement) | ✅ |
-| KPI utilization trend | ⚡ `compare_yield_periods` | ✅ |
+| KPI plan attainment | ⚡ `get_plan_achievement_rate` (total) | ✅ |
+| KPI utilization trend | ⚡ `get_plan_achievement_rate` (prev period vs current) | ✅ |
 | KPI WIP orders | — | ❌ mock |
-| Chart 0 line trend | ⚡ `get_yield_aggregation` (daily) | ✅ |
+| Chart 0 line trend | ⚡ `get_plan_achievement_rate` (daily) | ✅ |
 | Chart 1 WO status | — | ❌ mock |
 | Chart 2 capacity gauge | ⚡ `forecast_capacity_hr` | ✅ |
 | Chart 3 line load | ⚡ `get_device_production_rate` | ✅ |
@@ -302,10 +315,10 @@ Legend:
 
 | Slot | MCP / SQL | Status |
 |------|-----------|--------|
-| KPI health | ⚡ yield aggregation + compare periods | ✅ |
+| KPI health | ⚡ `get_plan_achievement_rate` + prior-period comparison | ✅ |
 | KPI alerts | ⚡ yield anomalies | ✅ |
 | KPI avg downtime | — | ❌ |
-| Chart 0 health trend | ⚡ daily yield aggregation | ✅ |
+| Chart 0 health trend | ⚡ `get_plan_achievement_rate` (daily) | ✅ |
 | Chart 1 alert levels | — | ❌ mock |
 | Chart 2 maintenance | 🔧 `_fetch_device_registry_summary` | ✅ |
 | Chart 3 downtime | ⚡ device production rate (inverse proxy) | ✅ |
@@ -377,30 +390,48 @@ Results merged into `CrossModuleResult` → synthesis with caller’s module per
 
 ## 8. Production yield routing (core design)
 
-The most reused MCP pattern is **dual-table yield routing** in `production_tools.py`:
+The most reused MCP pattern is **dual-table yield routing** in `production_tools.py`, implemented via [`core/line_scope.py`](../core/line_scope.py):
 
 ```text
 yield_type = equipment
   FROM t_smt_program_consumption_record eq
-  WHERE device_sn = :device_sn
-     OR device_sn IN (SELECT device_sn FROM t_co_device WHERE cd_location = :line_id)
+  WHERE eq.device_sn = :device_sn
+     OR eq.area_sn = :line_id
+     OR eq.area_sn IN (SELECT area_sn FROM t_co_area
+                       WHERE area_sn = :line_id OR area_name = :line_id)
 
 yield_type = reported
   FROM t_wip_detail wd
   JOIN t_co_area ws ON wd.work_stationsn = ws.area_sn
   JOIN t_co_area line ON ws.parent_sn = line.area_sn
-  WHERE line.area_sn = :line_id
+  WHERE line.area_sn = :line_id OR line.area_name = :line_id
+
+line_id = "all" (equipment)
+  GROUP BY eq.area_sn, area_name — no single-line WHERE filter
+
+line_id = null (equipment or reported)
+  No line filter (1=1) — plant-wide total
 ```
 
-**Important:** Equipment logs often have NULL `area_sn` on consumption rows — line scoping uses **`t_co_device.cd_location`**, not `eq.area_sn`.
+**Important:** Chat MCP tools scope equipment rows via **`eq.area_sn`** on the consumption record (with Chinese name resolution through `t_co_area`). They do **not** join `t_co_device.cd_location`. The equipment **dashboard** (`core/dashboard/equipment.py`) still uses `cd_location` for registry KPIs — a separate code path.
 
 **Achievement rate:** `finish_qty / mount_sheet_qty` (equipment) or good qty / pro_qty (reported).
+
+**`get_yield_aggregation` result extensions:**
+
+| Field | When set |
+|-------|----------|
+| `scope` | `"line"` (default), `"plant"` (no line/device), `"all_lines"` (`line_id="all"`) |
+| `refinement_suggested` | `true` when plant-wide total > 0 — synthesis asks user to drill down by line/product |
+| `line_breakdown` | Per-line `{area_sn, area_name, value}` matrix when `scope="all_lines"` |
+
+**System date anchoring:** Intent prompts and param mappers use `dashboard_reference_date` (env `DASHBOARD_REFERENCE_DATE`, default **`2026-06-21`**) so colloquial dates like “今天” resolve against factory data, not the host clock.
 
 ---
 
 ## 9. MCP inventory summary
 
-### 9.1 All registered tools (18 chat intents → 18 tool bindings)
+### 9.1 All registered tools (19 chat intents → 19 tool bindings)
 
 | # | Tool | Module file | Chat | Dashboard use |
 |---|------|-------------|------|---------------|
@@ -410,24 +441,25 @@ yield_type = reported
 | 4 | `get_product_yield` | production_tools | ✅ | — |
 | 5 | `get_device_production_rate` | production_tools | ✅ | Production, Equipment |
 | 6 | `get_standard_time_achievement` | production_tools | ✅ | — |
-| 7 | `get_production_root_cause` | production_engines | ✅ | — |
-| 8 | `optimize_production_schedule` | production_engines | ✅ | — |
-| 9 | `forecast_capacity_hr` | production_engines | ✅ | Production |
-| 10 | `get_quality_defect_aggregation` | quality_tools | ✅ | Quality |
-| 11 | `analyze_defect_root_cause` | quality_tools | ✅ | Quality |
-| 12 | `check_error_prevention` | quality_tools | ✅ | — |
-| 13 | `verify_quality_effectiveness` | quality_tools | ✅ | — |
-| 14 | `get_inventory_status` | warehouse_tools | ✅ | Warehouse, Procurement |
-| 15 | `guide_inbound_outbound` | warehouse_tools | ✅ | — |
-| 16 | `profile_obsolete_inventory` | warehouse_tools | ✅ | Warehouse |
-| 17 | `trace_material_forward` | warehouse_tools | ✅ | — |
-| 18 | `trace_product_reverse` | warehouse_tools | ✅ | — |
+| 7 | `get_factory_structure_metadata` | production_tools | ✅ | — |
+| 8 | `get_production_root_cause` | production_engines | ✅ | — |
+| 9 | `optimize_production_schedule` | production_engines | ✅ | — |
+| 10 | `forecast_capacity_hr` | production_engines | ✅ | Production |
+| 11 | `get_quality_defect_aggregation` | quality_tools | ✅ | Quality |
+| 12 | `analyze_defect_root_cause` | quality_tools | ✅ | Quality |
+| 13 | `check_error_prevention` | quality_tools | ✅ | — |
+| 14 | `verify_quality_effectiveness` | quality_tools | ✅ | — |
+| 15 | `get_inventory_status` | warehouse_tools | ✅ | Warehouse, Procurement |
+| 16 | `guide_inbound_outbound` | warehouse_tools | ✅ | — |
+| 17 | `profile_obsolete_inventory` | warehouse_tools | ✅ | Warehouse |
+| 18 | `trace_material_forward` | warehouse_tools | ✅ | — |
+| 19 | `trace_product_reverse` | warehouse_tools | ✅ | — |
 
 ### 9.2 Module integration matrix (from all-features.md)
 
 | Module | Chat MCP | Tool count | Dashboard MCP calls | Dashboard-only SQL |
 |--------|----------|------------|---------------------|-------------------|
-| Production | ✅ | 9 | 6 + engines | Defect monthly SQL |
+| Production | ✅ | 10 | 6 + engines | Defect monthly SQL |
 | Warehouse | ✅ | 5 | 2 | Stock summary, bins, age |
 | Quality | ✅ | 4 | 2 | Daily defects, problem summary |
 | Equipment | ❌ | 0 (reuse prod) | 5 production tools | Device registry, active ratio |
@@ -442,11 +474,21 @@ yield_type = reported
 | **No equipment/procurement intents** | Equipment/procurement chat depends on NL mapping to other domains |
 | **No “output per product per line” composite tool** | Questions like “equipment output for each product on FDQ-SMT-6” need `get_device_production_rate` (by device) or multiple `get_product_yield` calls (one product at a time) |
 | **Scheduling SQL ignores line_id** | `optimize_production_schedule` queries all upcoming MOs globally |
-| **Standard time uses `eq.area_sn`** | May mismatch lines where only `cd_location` on device registry is populated |
-| **Intent prompt lists L-01 examples in validation errors** | Real lines are `FDQ-SMT-3`, `FDQ-SMT-6`, etc. (see mesai-query-1.1.md) |
+| **Dashboard vs MCP line scoping differs** | Equipment dashboard uses `t_co_device.cd_location`; chat MCP uses `eq.area_sn` on consumption rows |
+| **Factory metadata returns all `t_co_area` rows** | `get_factory_structure_metadata` does not filter to production-line node type only |
 | **Dashboard scheduler prewarms one line** | Default `FDQ-SMT-3` only — not all lines |
 | **Parallel dashboard gathers** | 4–7 simultaneous DB connections per build ([all-connections.md](./all-connections.md)) |
 | **Partial fallback charts** | When MCP returns empty data, dashboard sets `source: fallback` and UI shows mock series |
+
+**Resolved (2026 colloquial-query refactor):**
+
+| Former gap | Current behavior |
+|------------|------------------|
+| Host clock vs factory data year | `DASHBOARD_REFERENCE_DATE` anchors intent dates to **2026-06-21** |
+| Plant-wide yield blocked by validation | `YIELD_AGGREGATION` accepts null `line_id` / `device_sn` |
+| “有几条产线?” → UNKNOWN | `FACTORY_METADATA_LOOKUP` → `get_factory_structure_metadata` |
+| Line yield misrouted to product yield | Intent prompt routing rules prefer `YIELD_AGGREGATION` when no product code |
+| English-only validation/fallback in zh-CN | Bilingual messages in `param_validation`, `router`, `report_generator` |
 
 ---
 
@@ -493,6 +535,8 @@ sequenceDiagram
 | Param validation | `orchestrator/param_validation.py` |
 | Router | `orchestrator/router.py` |
 | Intent prompt | `orchestrator/prompts/intent.py` |
+| Reference date | `core/reference_date.py`, `core/config.py` (`DASHBOARD_REFERENCE_DATE`) |
+| Synthesis prompt | `orchestrator/prompts/synthesis.py` |
 | Cross-module | `orchestrator/cross_module.py` |
 | Personas / greetings | `orchestrator/module_personas.py` |
 | Report synthesis | `orchestrator/report_generator.py` |

@@ -15,6 +15,7 @@ from mcp_tools.production_tools import (
     FactoryMetadataParams,
     get_device_production_rate_tool,
     get_factory_structure_metadata_tool,
+    get_plan_achievement_rate_tool,
     get_product_yield_tool,
     get_standard_time_achievement_tool,
     get_yield_aggregation_tool,
@@ -108,6 +109,12 @@ def register_all_tools(mappers: dict[IntentType, ParamMapper]) -> None:
         forecast_capacity_hr_tool,
         mappers[IntentType.PRODUCTION_CAPACITY_FORECAST],
         "Capacity forecast generated",
+    )
+    _register(
+        IntentType.PRODUCTION_PLAN_ACHIEVEMENT,
+        get_plan_achievement_rate_tool,
+        mappers[IntentType.PRODUCTION_PLAN_ACHIEVEMENT],
+        "Plan achievement rate retrieved successfully",
     )
     _register(
         IntentType.FACTORY_METADATA_LOOKUP,
