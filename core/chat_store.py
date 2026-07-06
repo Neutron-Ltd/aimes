@@ -25,8 +25,6 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     response_json TEXT,
     created_at TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_chat_messages_workshop_module_created
-    ON chat_messages (workshop_id, assistant_module, created_at);
 """
 
 
@@ -55,6 +53,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ON chat_messages (workshop_id, assistant_module, created_at)
         """
     )
+    conn.commit()
 
 
 def _connect() -> sqlite3.Connection:
