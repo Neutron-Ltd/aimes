@@ -54,6 +54,21 @@ DASHBOARD_BUILDERS = {
     "procurement": procurement_dashboard_builder,
 }
 
+VALID_ASSISTANT_MODULES = frozenset(DASHBOARD_BUILDERS.keys())
+
+
+def _require_assistant_module(assistant_module: str | None) -> str:
+    module = (assistant_module or "").strip()
+    if module not in VALID_ASSISTANT_MODULES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "assistant_module is required and must be one of: "
+                + ", ".join(sorted(VALID_ASSISTANT_MODULES))
+            ),
+        )
+    return module
+
 
 def _require_workshop_id(context: MCPContext) -> str:
     workshop_id = (context.workshop_id or "").strip()
@@ -287,20 +302,28 @@ async def query_voice(
 @router.get(
     "/chat/history",
     response_model=ChatHistoryResponse,
-    summary="Load chat history for the current workshop",
+    summary="Load chat history for the current workshop and assistant module",
 )
-async def get_chat_history(request: Request) -> ChatHistoryResponse:
+async def get_chat_history(
+    request: Request,
+    assistant_module: str,
+) -> ChatHistoryResponse:
     context: MCPContext = get_mes_context(request)
     workshop_id = _require_workshop_id(context)
-    rows = await list_messages(workshop_id)
+    module = _require_assistant_module(assistant_module)
+    rows = await list_messages(workshop_id, module)
     messages = [ChatMessageRecord(**row) for row in rows]
-    return ChatHistoryResponse(workshop_id=workshop_id, messages=messages)
+    return ChatHistoryResponse(
+        workshop_id=workshop_id,
+        assistant_module=module,
+        messages=messages,
+    )
 
 
 @router.post(
     "/chat/messages",
     response_model=ChatMessageRecord,
-    summary="Append a chat message for the current workshop",
+    summary="Append a chat message for the current workshop and assistant module",
 )
 async def post_chat_message(
     body: ChatMessageCreate,
@@ -308,8 +331,10 @@ async def post_chat_message(
 ) -> ChatMessageRecord:
     context: MCPContext = get_mes_context(request)
     workshop_id = _require_workshop_id(context)
+    module = _require_assistant_module(body.assistant_module)
     row = await append_message(
         workshop_id,
+        module,
         body.role,
         body.content,
         body.response_json,
@@ -319,13 +344,21 @@ async def post_chat_message(
 
 @router.delete(
     "/chat/history",
-    summary="Clear chat history for the current workshop",
+    summary="Clear chat history for the current workshop and assistant module",
 )
-async def delete_chat_history(request: Request) -> dict[str, int | str]:
+async def delete_chat_history(
+    request: Request,
+    assistant_module: str,
+) -> dict[str, int | str]:
     context: MCPContext = get_mes_context(request)
     workshop_id = _require_workshop_id(context)
-    deleted = await clear_history(workshop_id)
-    return {"workshop_id": workshop_id, "deleted": deleted}
+    module = _require_assistant_module(assistant_module)
+    deleted = await clear_history(workshop_id, module)
+    return {
+        "workshop_id": workshop_id,
+        "assistant_module": module,
+        "deleted": deleted,
+    }
 
 
 @router.post(

@@ -114,6 +114,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { DArrowLeft, DArrowRight } from '@element-plus/icons-vue'
 import { useAssistantChat } from '../composables/useAssistantChat'
+import { useChatHistory } from '../composables/useChatHistory'
 import { useLocale } from '../composables/useLocale'
 import { renderMarkdown } from '../utils/markdown'
 
@@ -151,14 +152,18 @@ const emit = defineEmits(['send', 'prompt'])
 
 const { t } = useLocale()
 const { sendMessage, sendPrompt } = useAssistantChat(props.assistantKey)
+const { loadHistory, persistMessage } = useChatHistory(props.assistantKey)
 
 const inputValue = ref('')
 const thinking = ref(false)
+const historyLoading = ref(true)
 const messages = ref([])
 const chatWindowRef = ref(null)
 let messageSeed = 0
 
-const showPrompts = computed(() => messages.value.length === 0 && !thinking.value)
+const showPrompts = computed(
+  () => !historyLoading.value && messages.value.length === 0 && !thinking.value
+)
 const hasConversation = computed(() => messages.value.length > 0 || thinking.value)
 
 /** 各助手头像构图不同，微调悬浮窗裁剪焦点以露出头部 */
@@ -181,11 +186,21 @@ const dockAvatarStyle = computed(() => {
 
 const storageKey = computed(() => `mes-ai-console-collapsed-${props.assistantKey}`)
 
-onMounted(() => {
-  if (typeof sessionStorage === 'undefined') return
-  const stored = sessionStorage.getItem(storageKey.value)
-  if (stored === '1') {
-    collapsed.value = true
+onMounted(async () => {
+  if (typeof sessionStorage !== 'undefined') {
+    const stored = sessionStorage.getItem(storageKey.value)
+    if (stored === '1') {
+      collapsed.value = true
+    }
+  }
+
+  try {
+    const restored = await loadHistory()
+    if (restored.length) {
+      messages.value = restored
+    }
+  } finally {
+    historyLoading.value = false
   }
 })
 
@@ -217,12 +232,15 @@ async function runConversation(userText, eventName) {
 
   thinking.value = true
   messages.value.push(createMessage('user', text))
+  persistMessage('user', text)
   await scrollToBottom()
 
   try {
-    const reply = eventName === 'prompt' ? await sendPrompt(text) : await sendMessage(text)
-    if (reply) {
-      messages.value.push(createMessage('assistant', reply))
+    const result =
+      eventName === 'prompt' ? await sendPrompt(text) : await sendMessage(text)
+    if (result?.reply) {
+      messages.value.push(createMessage('assistant', result.reply))
+      persistMessage('assistant', result.reply, result.responseJson ?? undefined)
     }
     emit(eventName, text)
   } finally {

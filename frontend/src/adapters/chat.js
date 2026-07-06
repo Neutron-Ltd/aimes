@@ -18,7 +18,7 @@ function wrapQuery(assistantKey, message) {
  * @param {string} assistantKey
  * @param {string} message
  * @param {string} locale - app locale zh|en
- * @returns {Promise<string|null>}
+ * @returns {Promise<{ reply: string, responseJson: object|null }|null>}
  */
 export async function sendIntegratedChat(assistantKey, message, locale) {
   const text = message?.trim()
@@ -37,17 +37,25 @@ export async function sendIntegratedChat(assistantKey, message, locale) {
       (response.result ? JSON.stringify(response.result, null, 2) : '')
 
     if (!reply) {
-      return locale === 'en'
-        ? 'No response from the assistant. Please try rephrasing your question.'
-        : '助手未返回有效回复，请尝试换一种问法。'
+      return {
+        reply:
+          locale === 'en'
+            ? 'No response from the assistant. Please try rephrasing your question.'
+            : '助手未返回有效回复，请尝试换一种问法。',
+        responseJson: null
+      }
     }
 
-    return reply
+    return { reply, responseJson: response }
   } catch (err) {
     if (err instanceof ApiError) {
-      return locale === 'en'
-        ? `Request failed: ${err.message}`
-        : `请求失败：${err.message}`
+      return {
+        reply:
+          locale === 'en'
+            ? `Request failed: ${err.message}`
+            : `请求失败：${err.message}`,
+        responseJson: null
+      }
     }
     throw err
   }

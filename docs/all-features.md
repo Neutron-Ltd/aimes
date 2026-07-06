@@ -65,7 +65,7 @@ flowchart TB
 | Chart loading UX | ✅ | Plain "Loading" text in chart boxes; staggered ECharts init |
 | Live chat API (backend) | ✅ | Orchestrator + MCP fully wired for production, warehouse, quality |
 | Live chat API (frontend gate) | Config | `VITE_INTEGRATED_ASSISTANTS` (default: `production` only); not counted in ✅/❌ below |
-| Chat history persistence | ❌ | Backend SQLite exists; frontend keeps messages in component state only |
+| Chat history persistence | ✅ | Per workshop + assistant module via SQLite; `AssistantChatConsole` loads/saves via `/api/v1/chat/*` |
 | Partial dashboard flag | ✅ | API sets `partial: true` when any slot falls back; UI does not surface it yet |
 
 ---

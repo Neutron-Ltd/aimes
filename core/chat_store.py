@@ -1,4 +1,4 @@
-"""Server-side chat message persistence scoped by workshop ID (local SQLite)."""
+"""Server-side chat message persistence scoped by workshop ID and assistant module (local SQLite)."""
 
 from __future__ import annotations
 
@@ -19,13 +19,14 @@ _CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS chat_messages (
     id TEXT PRIMARY KEY,
     workshop_id TEXT NOT NULL,
+    assistant_module TEXT NOT NULL DEFAULT 'production',
     role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'error')),
     content TEXT NOT NULL,
     response_json TEXT,
     created_at TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_chat_messages_workshop_created
-    ON chat_messages (workshop_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_workshop_module_created
+    ON chat_messages (workshop_id, assistant_module, created_at);
 """
 
 
@@ -36,10 +37,31 @@ def _db_path() -> Path:
     return path
 
 
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(chat_messages)").fetchall()
+    }
+    if columns and "assistant_module" not in columns:
+        conn.execute(
+            """
+            ALTER TABLE chat_messages
+            ADD COLUMN assistant_module TEXT NOT NULL DEFAULT 'production'
+            """
+        )
+        conn.commit()
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_workshop_module_created
+        ON chat_messages (workshop_id, assistant_module, created_at)
+        """
+    )
+
+
 def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(_db_path(), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(_CREATE_TABLE_SQL)
+    _migrate_schema(conn)
     return conn
 
 
@@ -54,6 +76,7 @@ def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     return {
         "id": row["id"],
         "workshop_id": row["workshop_id"],
+        "assistant_module": row["assistant_module"],
         "role": row["role"],
         "content": row["content"],
         "response_json": parsed,
@@ -61,17 +84,17 @@ def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def _list_messages_sync(workshop_id: str) -> list[dict[str, Any]]:
+def _list_messages_sync(workshop_id: str, assistant_module: str) -> list[dict[str, Any]]:
     conn = _connect()
     try:
         rows = conn.execute(
             """
-            SELECT id, workshop_id, role, content, response_json, created_at
+            SELECT id, workshop_id, assistant_module, role, content, response_json, created_at
             FROM chat_messages
-            WHERE workshop_id = ?
+            WHERE workshop_id = ? AND assistant_module = ?
             ORDER BY created_at ASC
             """,
-            (workshop_id,),
+            (workshop_id, assistant_module),
         ).fetchall()
         return [_row_to_dict(r) for r in rows]
     finally:
@@ -80,6 +103,7 @@ def _list_messages_sync(workshop_id: str) -> list[dict[str, Any]]:
 
 def _append_message_sync(
     workshop_id: str,
+    assistant_module: str,
     role: str,
     content: str,
     response_json: Optional[dict[str, Any]] = None,
@@ -91,14 +115,19 @@ def _append_message_sync(
         payload = json.dumps(response_json) if response_json is not None else None
         conn.execute(
             """
-            INSERT INTO chat_messages (id, workshop_id, role, content, response_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO chat_messages (
+                id, workshop_id, assistant_module, role, content, response_json, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (msg_id, workshop_id, role, content, payload, now),
+            (msg_id, workshop_id, assistant_module, role, content, payload, now),
         )
         conn.commit()
         row = conn.execute(
-            "SELECT id, workshop_id, role, content, response_json, created_at FROM chat_messages WHERE id = ?",
+            """
+            SELECT id, workshop_id, assistant_module, role, content, response_json, created_at
+            FROM chat_messages WHERE id = ?
+            """,
             (msg_id,),
         ).fetchone()
         return _row_to_dict(row) if row else {}
@@ -109,12 +138,15 @@ def _append_message_sync(
         conn.close()
 
 
-def _clear_history_sync(workshop_id: str) -> int:
+def _clear_history_sync(workshop_id: str, assistant_module: str) -> int:
     conn = _connect()
     try:
         cur = conn.execute(
-            "DELETE FROM chat_messages WHERE workshop_id = ?",
-            (workshop_id,),
+            """
+            DELETE FROM chat_messages
+            WHERE workshop_id = ? AND assistant_module = ?
+            """,
+            (workshop_id, assistant_module),
         )
         conn.commit()
         return cur.rowcount
@@ -125,32 +157,54 @@ def _clear_history_sync(workshop_id: str) -> int:
         conn.close()
 
 
-async def list_messages(workshop_id: str) -> list[dict[str, Any]]:
+async def list_messages(workshop_id: str, assistant_module: str) -> list[dict[str, Any]]:
     try:
-        return await asyncio.to_thread(_list_messages_sync, workshop_id)
+        return await asyncio.to_thread(
+            _list_messages_sync, workshop_id, assistant_module
+        )
     except Exception:
-        logger.exception("Failed to list chat messages for workshop=%s", workshop_id)
+        logger.exception(
+            "Failed to list chat messages for workshop=%s module=%s",
+            workshop_id,
+            assistant_module,
+        )
         raise
 
 
 async def append_message(
     workshop_id: str,
+    assistant_module: str,
     role: str,
     content: str,
     response_json: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     try:
         return await asyncio.to_thread(
-            _append_message_sync, workshop_id, role, content, response_json
+            _append_message_sync,
+            workshop_id,
+            assistant_module,
+            role,
+            content,
+            response_json,
         )
     except Exception:
-        logger.exception("Failed to append chat message for workshop=%s", workshop_id)
+        logger.exception(
+            "Failed to append chat message for workshop=%s module=%s",
+            workshop_id,
+            assistant_module,
+        )
         raise
 
 
-async def clear_history(workshop_id: str) -> int:
+async def clear_history(workshop_id: str, assistant_module: str) -> int:
     try:
-        return await asyncio.to_thread(_clear_history_sync, workshop_id)
+        return await asyncio.to_thread(
+            _clear_history_sync, workshop_id, assistant_module
+        )
     except Exception:
-        logger.exception("Failed to clear chat history for workshop=%s", workshop_id)
+        logger.exception(
+            "Failed to clear chat history for workshop=%s module=%s",
+            workshop_id,
+            assistant_module,
+        )
         raise

@@ -186,16 +186,10 @@ Each assistant folder under `views/assistants/<name>/` contains:
 |------------|------|------|
 | `useLocale` | `composables/useLocale.js` | i18n, datetime formatting, page config assembly |
 | `useAssistantPage` | `composables/useAssistantPage.js` | ECharts lifecycle (init, resize, dispose), insight text, chart refs |
-| `useAssistantChat` | `composables/useAssistantChat.js` | Chat send/prompt handlers — **mock only** today |
+| `useAssistantChat` | `composables/useAssistantChat.js` | Chat send/prompt — integrated modules call `/query`, others use mock replies |
+| `useChatHistory` | `composables/useChatHistory.js` | Load/save per-module chat history via `/chat/history` and `/chat/messages` |
 
-The chat composable includes a commented TODO showing the intended integration point:
-
-```js
-// POST /api/assistant/chat  (or the project's /api/v1/query)
-// body: { assistantKey, message }
-```
-
-Mock replies use keys like `assistants.production.mockReply` in `messages.js`, with ~1–1.5 s artificial latency.
+Integrated assistants call `POST /api/v1/query` with `assistant_module`. Mock assistants use keys like `assistants.production.mockReply` in `messages.js`, with ~1–1.5 s artificial latency. All modules persist conversation history on send.
 
 ---
 
@@ -273,6 +267,9 @@ Backend optional: `DEFAULT_LINE_ID=FDQ-SMT-3`, `DEFAULT_WH_CODE=WH01` in root `.
 | `GET /api/v1/assistants/equipment/dashboard` | Equipment dashboard | KPI + chart slots (`line_id` optional) |
 | `GET /api/v1/assistants/procurement/dashboard` | Procurement dashboard | KPI + chart slots (`wh_code` optional) |
 | `POST /api/v1/query` | Integrated assistant chat | NL query → Markdown reply; optional `assistant_module` for persona |
+| `GET /api/v1/chat/history` | All assistant chat consoles | Load persisted messages (`assistant_module` query param) |
+| `POST /api/v1/chat/messages` | All assistant chat consoles | Append user/assistant message per module |
+| `DELETE /api/v1/chat/history` | Optional | Clear thread for one module |
 | `GET /api/v1/health` | Optional | Liveness check |
 
 ### Integration architecture
@@ -280,6 +277,7 @@ Backend optional: `DEFAULT_LINE_ID=FDQ-SMT-3`, `DEFAULT_WH_CODE=WH01` in root `.
 ```
 frontend/src/api/           # HTTP client (repo-independent)
 frontend/src/adapters/      # chartSlots.js, dashboard.js, chat.js (shared)
+frontend/src/api/chat.js    # chat history GET/POST/DELETE
 frontend/src/composables/
   useIntegratedAssistantPage.js   # generic dashboard loader
   useProductionAssistantPage.js   # production wrapper
@@ -288,6 +286,7 @@ frontend/src/composables/
   useEquipmentAssistantPage.js    # equipment wrapper
   useProcurementAssistantPage.js  # procurement wrapper
   useAssistantChat.js             # routes integrated keys to /query
+  useChatHistory.js               # per-module history load/save
   useAssistantPage.js             # optional live KPI/chart refs
 ```
 

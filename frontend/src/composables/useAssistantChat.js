@@ -21,7 +21,7 @@ export function useAssistantChat(assistantKey) {
 
   /**
    * @param {string} message
-   * @returns {Promise<string|null>}
+   * @returns {Promise<{ reply: string, responseJson: object|null }|null>}
    */
   async function sendMessage(message) {
     const text = message?.trim()
@@ -32,12 +32,12 @@ export function useAssistantChat(assistantKey) {
     }
 
     await waitMockLatency()
-    return getMockReply(text)
+    return { reply: getMockReply(text), responseJson: null }
   }
 
   /**
    * @param {string} prompt
-   * @returns {Promise<string|null>}
+   * @returns {Promise<{ reply: string, responseJson: object|null }|null>}
    */
   async function sendPrompt(prompt) {
     return sendMessage(prompt)

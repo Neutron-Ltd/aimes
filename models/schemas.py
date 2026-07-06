@@ -151,6 +151,7 @@ class OrchestratorRequest(BaseModel):
 
 
 class ChatMessageCreate(BaseModel):
+    assistant_module: str = Field(..., min_length=1)
     role: str = Field(..., pattern="^(user|assistant|error)$")
     content: str = Field(..., min_length=1)
     response_json: Optional[dict[str, Any]] = None
@@ -159,6 +160,7 @@ class ChatMessageCreate(BaseModel):
 class ChatMessageRecord(BaseModel):
     id: str
     workshop_id: str
+    assistant_module: str
     role: str
     content: str
     response_json: Optional[dict[str, Any]] = None
@@ -167,6 +169,7 @@ class ChatMessageRecord(BaseModel):
 
 class ChatHistoryResponse(BaseModel):
     workshop_id: str
+    assistant_module: str
     messages: list[ChatMessageRecord]
 
 
