@@ -98,7 +98,7 @@ def _build_mo_base_sql(
         f"{_MO_DATE_COL} BETWEEN :start_date AND :end_date",
         _ONLINE_FILTER_MB,
     ]
-    if line_id and not all_lines_matrix:
+    if line_id and not all_lines_matrix and not _is_all_lines(line_id):
         where.append(_line_filter("mb"))
     if with_product:
         where.append("mb.model_code = :product_code")
@@ -193,6 +193,10 @@ async def fetch_plan_achievement_rows(
 ) -> tuple[list[dict[str, Any]], DataSource]:
     all_lines = _is_all_lines(line_id)
     use_project = bool(mo_number and mo_number.strip())
+    single_day = start_date.date() == end_date.date()
+    all_lines_matrix = all_lines and not use_project and (
+        group_by == "total" or single_day
+    )
 
     if use_project:
         sql = text(
@@ -208,7 +212,7 @@ async def fetch_plan_achievement_rows(
             _build_mo_base_sql(
                 group_by=group_by,
                 line_id=line_id,
-                all_lines_matrix=all_lines and group_by == "total",
+                all_lines_matrix=all_lines_matrix,
                 with_product=bool(product_code),
                 with_mo=False,
             )

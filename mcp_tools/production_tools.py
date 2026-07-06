@@ -919,6 +919,7 @@ class GetPlanAchievementRateTool(
         _ = context
         async with optional_session(session) as db:
             all_lines = _is_all_lines(params.line_id)
+            single_day = params.start_date.date() == params.end_date.date()
             scope: Literal["line", "plant", "all_lines"] = "line"
             refinement_suggested = False
             line_breakdown: list[dict[str, Any]] = []
@@ -933,7 +934,10 @@ class GetPlanAchievementRateTool(
                 group_by=params.group_by,
             )
 
-            if all_lines and params.group_by == "total":
+            has_line_rows = bool(rows) and rows[0].get("area_sn") is not None
+            if all_lines and has_line_rows and (
+                params.group_by == "total" or single_day
+            ):
                 scope = "all_lines"
                 line_breakdown = build_line_breakdown(rows)
                 rate, actual, planned, breakdown = aggregate_plan_achievement(
