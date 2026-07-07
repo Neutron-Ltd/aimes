@@ -32,7 +32,9 @@ Users land on a **home page** with five interactive cards, then open an assistan
 | Build tool | Vite 5 | Dev server on port **3000**, auto-open browser |
 | UI library | Element Plus 2.x | Layout, cards, inputs, buttons, tags, icons |
 | Routing | Vue Router 4 | History mode (`createWebHistory`) |
-| Charts | ECharts 6 | Six charts per assistant in a bento-style mosaic |
+| Charts | ECharts 6 | Six charts per assistant in a bento-style mosaic (dashboard) |
+| Chat charts | Mermaid 11 | Bar/trend charts in assistant Markdown replies (`xychart-beta`) |
+| Chat Markdown | marked 15 + DOMPurify | `renderMarkdown()` + `initMermaidIn()` in `utils/markdown.js` |
 | i18n | Custom (`useLocale` + `messages.js`) | Chinese (default) and English; persisted in `localStorage` |
 
 There is no Pinia/Vuex store, no TypeScript in the running app (`main.js` is the entry point), and no test suite.
@@ -62,12 +64,15 @@ User action
     │
     ├─ Home card click ──► vue-router ──► assistant index.vue
     │
-    ├─ Dashboard KPIs / charts ──► useAssistantPage ──► static mock data (charts.js + messages.js)
+    ├─ Dashboard KPIs / charts ──► useIntegratedAssistantPage ──► GET /api/v1/assistants/{module}/dashboard
+    │                              └── adapters/chartSlots.js merges live slots (ECharts)
     │
-    └─ Chat message ──► useAssistantChat ──► simulated delay + mock reply from i18n
+    └─ Chat message ──► useAssistantChat ──► POST /api/v1/query
+                        └── Markdown reply: deterministic tables/charts + AI narrative
+                        └── renderMarkdown() + initMermaidIn() for Mermaid blocks
 ```
 
-There is **no live call** to `POST /api/v1/query` or other backend endpoints in the code that actually runs today.
+Integrated assistants call the live backend. Mock replies remain for modules not listed in `VITE_INTEGRATED_ASSISTANTS`.
 
 ---
 
@@ -129,6 +134,8 @@ All five assistants use **`AssistantDashboardLayout.vue`** with the same structu
 
 - Greeting and quick-prompt buttons when no conversation yet.
 - Message thread; integrated assistants call `POST /api/v1/query` (independent of dashboard load).
+- Assistant replies render as **Markdown** via `renderMarkdown()` (`marked` + DOMPurify).
+- **Mermaid charts** in replies (e.g. plan attainment bar chart) render via `initMermaidIn()` after each message update.
 - Collapsible panel: user can hide the console and reopen it from a docked floating button (`Teleport` to `body`).
 - Enter key or Send button submits messages.
 
@@ -176,7 +183,20 @@ Each assistant folder under `views/assistants/<name>/` contains:
 | `AppHeader` | `components/AppHeader.vue` | Live clock, product title, zh/en switch, fullscreen, conditional “Back to Home” |
 | `AssistantPageHeader` | `components/AssistantPageHeader.vue` | Dashboard title bar with status pill |
 | `AssistantChartMosaic` | `components/AssistantChartMosaic.vue` | Renders the six-chart bento grid |
-| `AssistantChatConsole` | `components/AssistantChatConsole.vue` | Full chat UI with collapse/expand |
+| `AssistantChatConsole` | `components/AssistantChatConsole.vue` | Full chat UI with collapse/expand; Mermaid init on message updates |
+
+### Chat Markdown rendering
+
+**File:** `frontend/src/utils/markdown.js`
+
+| Function | Role |
+|----------|------|
+| `renderMarkdown(text)` | Parse Markdown to sanitized HTML; ` ```mermaid ` blocks become `<div class="mermaid chat-mermaid">` |
+| `initMermaidIn(rootEl)` | Call `mermaid.run()` on unprocessed diagram nodes inside the chat window |
+
+**Flow:** `AssistantChatConsole` watches `messages` → `nextTick()` → `initMermaidIn(chatWindowRef)` so hybrid report charts display after `v-html` update.
+
+**Styling:** `.chat-mermaid` in `assets/styles/assistant-dashboard.css` (horizontal scroll, responsive SVG width).
 
 ---
 
@@ -294,7 +314,7 @@ frontend/src/composables/
 
 **Dashboard cache:** The backend may return cached snapshots (`X-Dashboard-Cache: hit|stale|miss`). Prewarm with `python scripts/refresh_dashboard_cache.py` on deploy.
 
-**Chat personas:** Integrated chat sends `assistant_module` (same key as the route, e.g. `procurement`) plus a domain prefix on the query string. The backend uses [`orchestrator/module_personas.py`](../orchestrator/module_personas.py) (aligned with `messages.js` greetings) for UNKNOWN-intent replies and module-specific synthesis/fallback report styles.
+**Chat personas:** Integrated chat sends `assistant_module` (same key as the route, e.g. `procurement`) plus a domain prefix on the query string. The backend uses [`orchestrator/module_personas.py`](../orchestrator/module_personas.py) for UNKNOWN-intent replies, `get_hybrid_style_block()` for narrative-only synthesis, and deterministic hybrid blocks for tables/charts. See [all-prompt.md §4.3](./all-prompt.md).
 
 **Partial live data (production):** KPI 在制工单, chart 工单状态分布, and chart OEE趋势 have no MCP tools yet.
 

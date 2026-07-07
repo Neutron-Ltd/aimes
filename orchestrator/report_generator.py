@@ -18,6 +18,50 @@ from core.logging import get_logger
 logger = get_logger(__name__)
 
 SYNTHESIS_TIMEOUT_SECONDS = 120
+QUANTITY_UNIT = "PCS"
+
+# List keys rendered deterministically in hybrid reports (order matters for display).
+_HYBRID_TABLE_KEYS: tuple[str, ...] = (
+    "line_breakdown",
+    "breakdown",
+    "devices",
+    "lines",
+    "hypotheses",
+    "low_stock",
+    "expiring",
+    "stagnant_items",
+    "fifo_lots",
+    "adjusted_schedule",
+    "probable_causes",
+)
+
+_HYBRID_SECTION_TITLES_ZH: dict[str, str] = {
+    "line_breakdown": "各产线达成率对比",
+    "breakdown": "产量趋势",
+    "devices": "设备绩效",
+    "lines": "产线结构",
+    "hypotheses": "质量根因假设",
+    "low_stock": "低库存预警",
+    "expiring": "临期库存",
+    "stagnant_items": "呆滞库存",
+    "fifo_lots": "FIFO 批次序列",
+    "adjusted_schedule": "排程建议",
+    "probable_causes": "可能生产因素",
+}
+
+_HYBRID_SECTION_TITLES_EN: dict[str, str] = {
+    "line_breakdown": "Line Plan Attainment Comparison",
+    "breakdown": "Production Trend",
+    "devices": "Equipment Performance",
+    "lines": "Factory Line Structure",
+    "hypotheses": "Quality Root Cause Hypotheses",
+    "low_stock": "Low Stock Alerts",
+    "expiring": "Expiring Inventory",
+    "stagnant_items": "Stagnant Inventory",
+    "fifo_lots": "FIFO Lot Sequence",
+    "adjusted_schedule": "Recommended Schedule",
+    "probable_causes": "Probable Production Factors",
+}
 
 # ---------------------------------------------------------------------------
 # Companion / greeting copy — delegated to module_personas (see messages.js)
@@ -205,7 +249,303 @@ def _table_field_labels(locale: str) -> dict[str, tuple[str, str]]:
 
 
 def _unit_suffix(locale: str) -> str:
-    return "件" if locale == "zh-CN" else "units"
+    return QUANTITY_UNIT
+
+
+def _format_qty_pcs(value: Any, locale: str = "zh-CN") -> str:
+    return f"{_format_number(value, locale)} {QUANTITY_UNIT}"
+
+
+def _sorted_line_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(items, key=lambda row: str(row.get("area_sn") or ""))
+
+
+def _compute_table_aggregates(db_result: dict[str, Any]) -> dict[str, Any]:
+    """Pre-compute subgroup totals from list arrays for LLM grounding."""
+    aggregates: dict[str, Any] = {}
+    line_breakdown = db_result.get("line_breakdown")
+    if isinstance(line_breakdown, list) and line_breakdown:
+        zero_lines = [
+            row
+            for row in line_breakdown
+            if isinstance(row, dict)
+            and float(row.get("actual_qty") or 0) == 0
+            and float(row.get("planned_qty") or 0) > 0
+        ]
+        aggregates["zero_output_line_count"] = len(zero_lines)
+        aggregates["zero_output_planned_sum"] = round(
+            sum(float(row.get("planned_qty") or 0) for row in zero_lines), 4
+        )
+        aggregates["zero_output_lines"] = [
+            {
+                "area_sn": row.get("area_sn"),
+                "area_name": row.get("area_name"),
+                "planned_qty": float(row.get("planned_qty") or 0),
+            }
+            for row in zero_lines
+        ]
+    for key in ("achievement_rate", "actual_qty", "planned_qty", "value"):
+        if key in db_result and db_result[key] is not None:
+            aggregates[key] = db_result[key]
+    return aggregates
+
+
+def _build_full_line_breakdown_table(
+    items: list[dict[str, Any]], locale: str = "zh-CN"
+) -> str:
+    zh = locale == "zh-CN"
+    headers = (
+        ("产线ID", "产线名称", "达成率(%)", "实际产出", "计划数量")
+        if zh
+        else ("Line ID", "Line Name", "Attainment (%)", "Actual Output", "Planned Qty")
+    )
+    lines = [
+        f"| {headers[0]} | {headers[1]} | {headers[2]} | {headers[3]} | {headers[4]} |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for item in _sorted_line_items(items):
+        area_sn = str(item.get("area_sn") or "—")
+        area_name = str(item.get("area_name") or "—")
+        rate = item.get("achievement_rate")
+        rate_display = (
+            f"{_format_number(rate, locale)}%"
+            if rate is not None
+            else "—"
+        )
+        actual = _format_qty_pcs(item.get("actual_qty", 0), locale)
+        planned = _format_qty_pcs(item.get("planned_qty", 0), locale)
+        lines.append(
+            f"| {area_sn} | {area_name} | {rate_display} | {actual} | {planned} |"
+        )
+    return "\n".join(lines)
+
+
+def _generate_mermaid_attainment_chart(items: list[dict[str, Any]]) -> str:
+    sorted_items = _sorted_line_items(items)
+    if not sorted_items:
+        return ""
+    labels = [str(row.get("area_sn") or "—") for row in sorted_items]
+    rates = [
+        round(float(row.get("achievement_rate") or 0), 2) for row in sorted_items
+    ]
+    max_rate = max(rates) if rates else 100.0
+    y_max = min(150.0, max(100.0, max_rate + 10.0))
+    label_list = ", ".join(f'"{label}"' for label in labels)
+    rate_list = ", ".join(str(rate) for rate in rates)
+    chart = (
+        "xychart-beta\n"
+        '    title "Plan Attainment Rate by Line (%)"\n'
+        f"    x-axis [{label_list}]\n"
+        f'    y-axis "Rate %" 0 --> {y_max:.0f}\n'
+        f"    bar [{rate_list}]"
+    )
+    return f"```mermaid\n{chart}\n```"
+
+
+def _generate_mermaid_trend_chart(items: list[dict[str, Any]]) -> str:
+    if not items:
+        return ""
+    labels: list[str] = []
+    rates: list[float] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        bucket = item.get("bucket") or item.get("date")
+        if bucket is None:
+            continue
+        labels.append(_format_period_label(bucket))
+        rates.append(round(float(item.get("achievement_rate") or 0), 2))
+    if not labels:
+        return ""
+    max_rate = max(rates) if rates else 100.0
+    y_max = min(150.0, max(100.0, max_rate + 10.0))
+    label_list = ", ".join(f'"{label}"' for label in labels)
+    rate_list = ", ".join(str(rate) for rate in rates)
+    chart = (
+        "xychart-beta\n"
+        '    title "Attainment Trend (%)"\n'
+        f"    x-axis [{label_list}]\n"
+        f'    y-axis "Rate %" 0 --> {y_max:.0f}\n'
+        f"    line [{rate_list}]"
+    )
+    return f"```mermaid\n{chart}\n```"
+
+
+def _render_hybrid_table_section(
+    key: str, items: list[dict[str, Any]], locale: str
+) -> Optional[str]:
+    if key == "line_breakdown":
+        return _build_full_line_breakdown_table(items, locale)
+    return _render_list_table(key, items, locale)
+
+
+def _build_overview_section(
+    db_result: dict[str, Any], aggregates: dict[str, Any], locale: str
+) -> list[str]:
+    zh = locale == "zh-CN"
+    lines = ["## 数据概览" if zh else "## Data Overview", ""]
+    if db_result.get("achievement_rate") is not None:
+        label = "计划达成率" if zh else "Plan attainment rate"
+        lines.append(
+            f"- **{label}:** "
+            f"{_format_number(db_result['achievement_rate'], locale)}%"
+        )
+    if db_result.get("actual_qty") is not None:
+        label = "实际产出" if zh else "Actual output"
+        lines.append(f"- **{label}:** {_format_qty_pcs(db_result['actual_qty'], locale)}")
+    if db_result.get("planned_qty") is not None:
+        label = "计划数量" if zh else "Planned quantity"
+        lines.append(
+            f"- **{label}:** {_format_qty_pcs(db_result['planned_qty'], locale)}"
+        )
+    if aggregates.get("zero_output_line_count") is not None:
+        if zh:
+            lines.append(
+                f"- **零产出产线:** {aggregates['zero_output_line_count']} 条"
+                f"（计划合计 {_format_qty_pcs(aggregates['zero_output_planned_sum'], locale)}）"
+            )
+        else:
+            lines.append(
+                f"- **Zero-output lines:** {aggregates['zero_output_line_count']}"
+                f" (planned total "
+                f"{_format_qty_pcs(aggregates['zero_output_planned_sum'], locale)})"
+            )
+    lines.append("")
+    return lines
+
+
+def _build_system_deterministic_block(
+    db_result: dict[str, Any], locale: str = "zh-CN"
+) -> tuple[str, bool]:
+    """Build Python-owned tables/charts block. Returns (markdown, hybrid_active)."""
+    if not db_result:
+        return "", False
+
+    aggregates = _compute_table_aggregates(db_result)
+    section_titles = (
+        _HYBRID_SECTION_TITLES_ZH if locale == "zh-CN" else _HYBRID_SECTION_TITLES_EN
+    )
+    active_keys = [
+        key
+        for key in _HYBRID_TABLE_KEYS
+        if isinstance(db_result.get(key), list) and db_result[key]
+    ]
+    if not active_keys:
+        return "", False
+
+    lines: list[str] = []
+    if any(
+        db_result.get(field) is not None
+        for field in ("achievement_rate", "actual_qty", "planned_qty", "value")
+    ) or aggregates:
+        lines.extend(_build_overview_section(db_result, aggregates, locale))
+
+    line_breakdown = db_result.get("line_breakdown")
+    if isinstance(line_breakdown, list) and line_breakdown:
+        chart_title = "产线达成率图表" if locale == "zh-CN" else "Line Attainment Chart"
+        lines.extend([f"## {chart_title}", ""])
+        lines.append(_generate_mermaid_attainment_chart(line_breakdown))
+        lines.append("")
+
+    breakdown = db_result.get("breakdown")
+    if isinstance(breakdown, list) and breakdown:
+        has_rates = any(
+            isinstance(row, dict) and row.get("achievement_rate") is not None
+            for row in breakdown
+        )
+        if has_rates:
+            trend_title = "达成率趋势图" if locale == "zh-CN" else "Attainment Trend Chart"
+            lines.extend([f"## {trend_title}", ""])
+            lines.append(_generate_mermaid_trend_chart(breakdown))
+            lines.append("")
+
+    for key in active_keys:
+        items = db_result[key]
+        section_title = section_titles.get(key, key)
+        lines.extend([f"## {section_title}", ""])
+        table = _render_hybrid_table_section(key, items, locale)
+        if table:
+            lines.append(table)
+        lines.append("")
+
+    lines.append("---")
+    lines.append("")
+    return "\n".join(lines), True
+
+
+def _strip_llm_data_duplicates(text: str) -> str:
+    """Remove tables/charts from LLM narrative to avoid duplicating deterministic blocks."""
+    if not text:
+        return ""
+    cleaned = re.sub(r"```mermaid\s*[\s\S]*?```", "", text, flags=re.IGNORECASE)
+    cleaned = re.sub(
+        r"(?:^\|.+\|\s*\n)+^\|\s*[-:| ]+\|\s*(?:\n(?:^\|.+\|\s*\n?)*)?",
+        "",
+        cleaned,
+        flags=re.MULTILINE,
+    )
+    cleaned = re.sub(r"^\s*\*其余产线\*.*$", "", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def _sanitize_narrative_names(narrative: str, db_result: dict[str, Any]) -> str:
+    """Safety net: replace 荣志 with 鸿志 when JSON master data uses 鸿志."""
+    line_breakdown = db_result.get("line_breakdown")
+    if not isinstance(line_breakdown, list):
+        return narrative
+    json_names = {
+        str(row.get("area_name"))
+        for row in line_breakdown
+        if isinstance(row, dict) and row.get("area_name")
+    }
+    if any("鸿志" in name for name in json_names) and "荣志" in narrative:
+        logger.warning("Narrative contained 荣志 while JSON uses 鸿志 — applying safety replacement")
+        return narrative.replace("荣志", "鸿志")
+    return narrative
+
+
+def _build_fallback_narrative_stub(
+    db_result: dict[str, Any], locale: str = "zh-CN"
+) -> str:
+    """Short deterministic commentary when Bailian is unavailable."""
+    zh = locale == "zh-CN"
+    aggregates = _compute_table_aggregates(db_result)
+    lines = [
+        "## 分析摘要" if zh else "## Analysis Summary",
+        "",
+    ]
+    if db_result.get("achievement_rate") is not None:
+        label = "计划达成率" if zh else "Plan attainment"
+        lines.append(
+            f"- **{label}:** "
+            f"{_format_number(db_result['achievement_rate'], locale)}%"
+        )
+    if aggregates.get("zero_output_line_count"):
+        if zh:
+            lines.append(
+                f"- **零产出产线:** {aggregates['zero_output_line_count']} 条，"
+                f"计划合计 {_format_qty_pcs(aggregates['zero_output_planned_sum'], locale)}。"
+                "建议优先核查这些产线的物料齐套与设备状态。"
+            )
+        else:
+            lines.append(
+                f"- **Zero-output lines:** {aggregates['zero_output_line_count']}, "
+                f"planned total "
+                f"{_format_qty_pcs(aggregates['zero_output_planned_sum'], locale)}. "
+                "Prioritize material kitting and equipment checks on these lines."
+            )
+    lines.append("")
+    if zh:
+        lines.append(
+            "*完整 AI 叙述暂时不可用。上方表格与图表由系统根据 MES 数据直接生成。*"
+        )
+    else:
+        lines.append(
+            "*Full AI narrative is temporarily unavailable. "
+            "Tables and charts above are generated directly from MES data.*"
+        )
+    return "\n".join(lines)
 
 
 def _is_empty(value: Any) -> bool:
@@ -502,12 +842,33 @@ def _fallback_markdown_report(
     reason: Optional[str] = None,
     locale: str = "zh-CN",
     module: Optional[str] = None,
+    deterministic_block: Optional[str] = None,
 ) -> str:
     """Deterministic executive-style report when Bailian synthesis is unavailable."""
     from orchestrator.module_personas import get_fallback_report_meta
 
     _ = query  # retained for logging/call-site compatibility; never echoed to users
     zh = locale == "zh-CN"
+
+    block = deterministic_block
+    hybrid_active = bool(block)
+    if block is None:
+        block, hybrid_active = _build_system_deterministic_block(db_result, locale)
+
+    if hybrid_active and block:
+        lines = [block]
+        if reason:
+            lines.extend([
+                "",
+                "> *完整叙述生成暂时不可用。以下结构化发现直接来自实时 MES 记录。*"
+                if zh
+                else "> *Full narrative generation was temporarily unavailable. "
+                "The structured findings below are drawn directly from live MES records.*",
+                "",
+            ])
+        lines.append(_build_fallback_narrative_stub(db_result, locale))
+        return "\n".join(lines)
+
     report_title, empty_hints = get_fallback_report_meta(locale, module)
 
     lines = [
@@ -659,30 +1020,20 @@ def _fallback_markdown_report(
     return "\n".join(lines)
 
 
-async def generate_ai_analysis(
-    query: str,
-    db_result: dict[str, Any],
-    rag_context: Optional[str] = None,
-    locale: str = "zh-CN",
-    module: Optional[str] = None,
+def _assemble_hybrid_report(
+    deterministic_block: str, narrative: str
 ) -> str:
-    """
-    Second-pass Bailian call: convert MCP tool output into a Markdown narrative.
+    narrative = narrative.strip()
+    if not narrative:
+        return deterministic_block.strip()
+    return f"{deterministic_block.strip()}\n\n{narrative}"
 
-    Falls back to a deterministic summary if credentials are missing or the API fails.
-    """
+
+async def _call_bailian_synthesis(prompt_text: str) -> tuple[Optional[str], Optional[str]]:
+    """Return (output_text, error_reason). error_reason set on failure."""
     settings = get_settings()
-
     if not settings.dashscope_api_key or not settings.bailian_app_id:
-        return _fallback_markdown_report(
-            query,
-            db_result,
-            reason="Bailian credentials not configured",
-            locale=locale,
-            module=module,
-        )
-
-    prompt_text = build_synthesis_prompt(query, db_result, rag_context, locale, module)
+        return None, "Bailian credentials not configured"
 
     try:
         response = await asyncio.wait_for(
@@ -698,20 +1049,79 @@ async def generate_ai_analysis(
         if response.status_code != HTTPStatus.OK:
             message = getattr(response, "message", "Unknown Bailian API error")
             logger.warning("Synthesis Bailian error: %s", message)
-            return _fallback_markdown_report(query, db_result, reason=message, locale=locale, module=module)
+            return None, message
 
         output_text = (response.output.text or "").strip()
         if not output_text:
-            return _fallback_markdown_report(query, db_result, reason="empty response", locale=locale, module=module)
+            return None, "empty response"
 
         if settings.debug:
             logger.debug("Bailian synthesis response: %s", output_text[:500])
 
-        return output_text
+        return output_text, None
 
     except asyncio.TimeoutError:
         logger.warning("Bailian synthesis timed out after %ss", SYNTHESIS_TIMEOUT_SECONDS)
-        return _fallback_markdown_report(query, db_result, reason="synthesis timeout", locale=locale, module=module)
+        return None, "synthesis timeout"
     except Exception as exc:
         logger.exception("Unexpected error during Bailian synthesis")
-        return _fallback_markdown_report(query, db_result, reason=str(exc), locale=locale, module=module)
+        return None, str(exc)
+
+
+async def generate_ai_analysis(
+    query: str,
+    db_result: dict[str, Any],
+    rag_context: Optional[str] = None,
+    locale: str = "zh-CN",
+    module: Optional[str] = None,
+) -> str:
+    """
+    Hybrid report synthesis: deterministic tables/charts (Python) + narrative (Bailian).
+
+    Falls back to deterministic block + stub narrative if Bailian is unavailable.
+    """
+    deterministic_block, hybrid_active = _build_system_deterministic_block(
+        db_result, locale
+    )
+
+    if hybrid_active:
+        aggregates = _compute_table_aggregates(db_result)
+        enriched_result = {**db_result, **aggregates}
+        prompt_text = build_synthesis_prompt(
+            query,
+            enriched_result,
+            rag_context,
+            locale,
+            module,
+            hybrid_mode=True,
+            deterministic_preview=deterministic_block[:500],
+        )
+        output_text, error = await _call_bailian_synthesis(prompt_text)
+        if output_text:
+            narrative = _sanitize_narrative_names(
+                _strip_llm_data_duplicates(output_text), db_result
+            )
+            return _assemble_hybrid_report(deterministic_block, narrative)
+        return _fallback_markdown_report(
+            query,
+            db_result,
+            reason=error,
+            locale=locale,
+            module=module,
+            deterministic_block=deterministic_block,
+        )
+
+    # Non-tabular results: legacy full LLM path
+    prompt_text = build_synthesis_prompt(
+        query, db_result, rag_context, locale, module, hybrid_mode=False
+    )
+    output_text, error = await _call_bailian_synthesis(prompt_text)
+    if output_text:
+        return output_text
+    return _fallback_markdown_report(
+        query,
+        db_result,
+        reason=error,
+        locale=locale,
+        module=module,
+    )

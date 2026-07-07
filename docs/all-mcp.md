@@ -33,7 +33,8 @@ flowchart TB
     Intent[Bailian intent parse]
     Valid[param_validation]
     Map[param_mappers]
-    Synth[Bailian synthesis]
+    DetBlock[Python deterministic block]
+    Synth[Bailian narrative only]
   end
 
   subgraph mcp [MCP tool layer]
@@ -52,7 +53,9 @@ flowchart TB
   Dash --> DashAPI
   Query --> Intent --> Valid --> Map --> mcp
   mcp --> PG
-  mcp --> Synth --> Query
+  mcp --> DetBlock
+  DetBlock --> Synth
+  Synth --> Query
   DashAPI --> SQLite
   DashAPI --> mcp
   mcp --> SQLite
@@ -102,8 +105,10 @@ class BaseMCPTool(ABC):
 | 5 | `validate_intent_params(intent, locale)` | Block dispatch if required entities missing (locale-aware messages) |
 | 6 | `get_tool_for_intent()` + `param_mappers` | Map intent → tool params |
 | 7 | `tool.run(params, context)` | `MCPToolResult` with JSON `data` |
-| 8 | `generate_ai_analysis()` | Markdown report using **module persona** + synthesis rules (incl. **exact `area_name` copy** — rule #15 in [all-prompt.md](./all-prompt.md)) |
-| 9 | Fallback | `_fallback_markdown_report()` if Bailian fails |
+| 8a | `_build_system_deterministic_block()` | Markdown tables (all rows, PCS, verbatim names) + Mermaid charts — **Python-owned, no LLM** |
+| 8b | `generate_ai_analysis()` → Bailian (`hybrid_mode=True` when list data present) | Narrative-only: executive summary, bottlenecks, grounded recommendations |
+| 9 | Report assembly | `deterministic_block + narrative`; `_strip_llm_data_duplicates()` removes LLM tables/charts |
+| 10 | Fallback | `_fallback_markdown_report()` — deterministic block + stub narrative if Bailian fails |
 
 **Frontend wiring:** [`frontend/src/adapters/chat.js`](../frontend/src/adapters/chat.js) prefixes queries with `【AI…助手】` and sends `assistant_module`. Live chat is gated by `VITE_INTEGRATED_ASSISTANTS` (default: `production` only) — backend MCP is wired regardless.
 
@@ -117,7 +122,7 @@ class BaseMCPTool(ABC):
 
 Frontend: [`frontend/src/api/chat.js`](../frontend/src/api/chat.js), [`frontend/src/composables/useChatHistory.js`](../frontend/src/composables/useChatHistory.js), wired in [`AssistantChatConsole.vue`](../frontend/src/components/AssistantChatConsole.vue). Valid modules: `production`, `warehouse`, `quality`, `equipment`, `procurement`.
 
-**Report format:** Dynamic AI Markdown (primary) or deterministic template fallback — **not** a fixed PDF layout. Persona and section hints come from [`orchestrator/module_personas.py`](../orchestrator/module_personas.py); numbers come from tool JSON.
+**Report format:** **Hybrid Markdown** when tool JSON contains list arrays (`line_breakdown`, `breakdown`, `devices`, etc.): Python renders tables/charts first; Bailian writes narrative only. Non-tabular results use full LLM synthesis. Fallback reuses the deterministic block. See [all-prompt.md §4.3](./all-prompt.md).
 
 ---
 

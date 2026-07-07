@@ -18,6 +18,22 @@ Maps each assistant dashboard chart to its visualization type, live vs fallback 
 
 ---
 
+## Chat report charts (hybrid synthesis)
+
+Separate from the six **dashboard ECharts** slots, the AI chat console can render **Mermaid** diagrams embedded in Markdown replies.
+
+| Aspect | Detail |
+|--------|--------|
+| **When** | MCP tool JSON contains list arrays (`line_breakdown`, `breakdown` with rates, etc.) — hybrid mode in [`orchestrator/report_generator.py`](../orchestrator/report_generator.py) |
+| **Generator** | Python `_generate_mermaid_attainment_chart()` / `_generate_mermaid_trend_chart()` — `xychart-beta` bar or line |
+| **Renderer** | `frontend/src/utils/markdown.js` → `initMermaidIn()`; triggered from `AssistantChatConsole.vue` |
+| **Data source** | Same MCP JSON as the deterministic Markdown table (not a separate API) |
+| **Example** | Plan attainment query → bar chart of `achievement_rate` by `area_sn` + full 5-column table |
+
+Dashboard charts (below) use **ECharts** via `GET /api/v1/assistants/{module}/dashboard`. Chat charts use **Mermaid** via `POST /api/v1/query` hybrid reports.
+
+---
+
 ## 1. Production / AI生产助手
 
 ### Charts / 图表

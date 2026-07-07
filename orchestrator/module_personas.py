@@ -287,6 +287,30 @@ def get_analyst_context(locale: str, module: Optional[str] = None) -> tuple[str,
     return role, block
 
 
+_HYBRID_STYLE_ZH = (
+    "数据表格与 Mermaid 图表已由系统生成并置于报告顶部，你仅撰写叙述性分析。",
+    "报告结构：执行摘要 → 瓶颈与异常 → 排程建议（不得重复表格或图表）。",
+    "建议必须引用 JSON 中的具体 area_sn、达成率与 PCS 数量。",
+    "对零产出产线（planned_qty > 0, actual_qty = 0）优先从物料齐套与设备状态角度分析。",
+    "使用「产线」「达成率」「在制工单」「产能负荷」等生产运营用语。",
+)
+
+_HYBRID_STYLE_EN = (
+    "Data tables and Mermaid charts are system-rendered at the top — write narrative analysis only.",
+    "Structure: executive summary → bottlenecks/anomalies → scheduling recommendations (no tables/charts).",
+    "Recommendations must cite specific area_sn, attainment rates, and PCS quantities from JSON.",
+    "For zero-output lines (planned_qty > 0, actual_qty = 0), focus on kitting and equipment constraints.",
+    "Use production operations language: lines, attainment, WIP, capacity load.",
+)
+
+
+def get_hybrid_style_block(locale: str, module: Optional[str] = None) -> str:
+    """Narrative-only style guidelines when hybrid deterministic block is active."""
+    _ = module  # module-specific hybrid styles can be added later
+    guidelines = _HYBRID_STYLE_ZH if locale == "zh-CN" else _HYBRID_STYLE_EN
+    return "\n".join(f"- {g}" for g in guidelines)
+
+
 def get_fallback_report_meta(
     locale: str, module: Optional[str] = None
 ) -> tuple[str, tuple[str, ...]]:

@@ -46,8 +46,9 @@ sequenceDiagram
   Router->>Bailian: Phase 0 intent (no PG)
   Router->>PG: Phase 1 MCP tools materialize dict
   Note over Router,PG: All sessions closed before Phase 2
-  Router->>Bailian: Phase 2 synthesis (no PG)
-  Router-->>Client: Markdown message
+  Router->>Router: Phase 2a deterministic block (tables, Mermaid, PCS)
+  Router->>Bailian: Phase 2b narrative-only synthesis (no PG)
+  Router-->>Client: Hybrid Markdown message
 
   Note over Router,SQLite: Dashboard GET never used by chat
 ```
@@ -91,7 +92,9 @@ else:
 | 0 | `parse_intent()` | No | Yes (Bailian intent) |
 | 0b | `retrieve_context()` (optional RAG) | Brief PG search after embed | Yes (embedding API) |
 | 1 | `_fetch_tool_result()` / `_fetch_cross_module_result()` | Yes — materialize dicts, close sessions | No |
-| 2 | `_synthesize_message()` | **No** | Yes (Bailian synthesis) |
+| 2 | `_synthesize_message()` → `generate_ai_analysis()` | **No** | Yes (Bailian narrative when hybrid; full synthesis otherwise) |
+| 2a | `_build_system_deterministic_block()` (inside synthesis, no PG) | **No** | **No** — pure Python from MCP JSON dict |
+| 2b | `_call_bailian_synthesis()` | **No** | Yes (Bailian) |
 
 Cross-module analysis ([`orchestrator/cross_module.py`](../orchestrator/cross_module.py)) runs **three MCP tools sequentially** (not `asyncio.gather`), so peak chat PG use is **1** connection at a time.
 
@@ -176,10 +179,11 @@ MCP production tools treat `line_id=None` as global (no line filter in SQL).
 
 ### 8.2 Chat POST — always live PostgreSQL
 
-`POST /api/v1/query` → orchestrator → Bailian intent → MCP tool(s) → synthesis.
+`POST /api/v1/query` → orchestrator → Bailian intent → MCP tool(s) → **hybrid report assembly**.
 
 - **Never** reads dashboard SQLite cache.
 - DB phase completes and all sessions close **before** synthesis LLM call.
+- When tool JSON has list arrays: Python builds deterministic tables/charts first; Bailian writes narrative only.
 - Cross-module: **1** connection at a time (sequential tools).
 
 ---

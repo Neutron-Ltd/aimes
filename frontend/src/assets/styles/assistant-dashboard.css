@@ -662,6 +662,17 @@
   word-break: break-word;
 }
 
+.chat-mermaid {
+  width: 100%;
+  overflow-x: auto;
+  padding: 0.5rem 0;
+}
+
+.chat-mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
 .chat-markdown :is(h1, h2, h3, h4) {
   margin: 0;
   color: #e2e8f0;

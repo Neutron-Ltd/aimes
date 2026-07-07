@@ -116,7 +116,7 @@ import { DArrowLeft, DArrowRight } from '@element-plus/icons-vue'
 import { useAssistantChat } from '../composables/useAssistantChat'
 import { useChatHistory } from '../composables/useChatHistory'
 import { useLocale } from '../composables/useLocale'
-import { renderMarkdown } from '../utils/markdown'
+import { renderMarkdown, initMermaidIn } from '../utils/markdown'
 
 const props = defineProps({
   /** 助手标识，对接后端时使用：production / warehouse / quality / equipment / procurement */
@@ -208,6 +208,15 @@ watch(collapsed, (value) => {
   if (typeof sessionStorage === 'undefined') return
   sessionStorage.setItem(storageKey.value, value ? '1' : '0')
 })
+
+watch(
+  messages,
+  async () => {
+    await nextTick()
+    await initMermaidIn(chatWindowRef.value)
+  },
+  { deep: true }
+)
 
 function setCollapsed(value) {
   collapsed.value = value

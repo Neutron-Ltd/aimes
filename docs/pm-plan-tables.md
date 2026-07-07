@@ -116,6 +116,8 @@ Only MOs that are **on-line** (actively being processed) count toward numerator 
 
 **达成率 = SUM(output_qty) ÷ SUM(plan_qty) × 100**
 
+When `line_id="all"` and the date range is a single day (or `group_by="total"`), the tool returns `line_breakdown[]` with `{area_sn, area_name, achievement_rate, actual_qty, planned_qty}` per line. The hybrid report layer renders this as a **5-column Markdown table** (PCS units, verbatim `area_name`) plus a **Mermaid bar chart** — see [all-prompt.md §4.3](./all-prompt.md).
+
 Computed in Python via `core.math_safeguard.plan_achievement_rate()`. Rates above 100% are allowed when output exceeds plan.
 
 ## Routing rules

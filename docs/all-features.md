@@ -50,7 +50,7 @@ flowchart TB
 **Shared data flow**
 
 - **Dashboard:** `useIntegratedAssistantPage.js` → `GET /api/v1/assistants/{module}/dashboard` → SQLite cache (server) → `core/dashboard/{module}.py` → MCP tools + SQL → frontend merges live slots via `adapters/chartSlots.js` (only when `source === "live"`).
-- **Chat:** `useAssistantChat.js` → `adapters/chat.js` → `POST /api/v1/query` → Bailian intent parse → MCP tool → Bailian synthesis → Markdown reply (or deterministic fallback template).
+- **Chat:** `useAssistantChat.js` → `adapters/chat.js` → `POST /api/v1/query` → Bailian intent parse → MCP tool → **hybrid report** (deterministic tables/charts + Bailian narrative) → Markdown reply (or deterministic fallback).
 - **Chat history:** `useChatHistory.js` → `api/chat.js` → `GET/POST /api/v1/chat/*` (scoped by `X-MES-Workshop-Id` + `assistant_module`); SQLite at `CHAT_DB_PATH`; load on mount, save after each exchange in `AssistantChatConsole.vue` (all five modules).
 
 ---
@@ -75,15 +75,28 @@ flowchart TB
 
 Reports are **not** a fixed PDF template. Content is **dynamic** based on the user query and live MCP tool results.
 
+When MCP JSON contains renderable list keys (`line_breakdown`, `breakdown`, `devices`, `lines`, warehouse lists, etc.), the system uses the **Hybrid Report Architecture**:
+
+| Phase | Owner | Output |
+|-------|-------|--------|
+| **1 — Deterministic** | Python [`_build_system_deterministic_block()`](../orchestrator/report_generator.py) | Data overview (PCS units), pre-computed aggregates, full Markdown tables (verbatim `area_name`), Mermaid `xychart-beta` charts |
+| **2 — Narrative** | Bailian (`hybrid_mode=True` in [`synthesis.py`](../orchestrator/prompts/synthesis.py)) | Executive summary, bottleneck analysis, grounded scheduling recommendations only |
+
+Final chat message: `deterministic_block + "\n\n" + narrative`. Duplicate tables/charts are stripped from the LLM output before assembly.
+
 | Path | Format |
 |------|--------|
-| **Primary** | **Dynamic AI Markdown** — Bailian second pass (`orchestrator/report_generator.py` → `generate_ai_analysis`) using module persona from `orchestrator/module_personas.py` + tool JSON |
+| **Primary (tabular data)** | **Hybrid Markdown** — deterministic block + Bailian narrative (`generate_ai_analysis`) |
+| **Primary (no list data)** | **Full LLM Markdown** — legacy synthesis path when hybrid is inactive |
 | **UNKNOWN intent** | **Fixed greeting** — static module greeting + sample prompts from `module_personas.py` (no tool call, no DB query) |
-| **Fallback** | **Deterministic template** — `_fallback_markdown_report()` builds titled sections, metric bullets, and tables from tool JSON when Bailian is unavailable or fails |
+| **Fallback** | **Deterministic block + stub narrative** — `_fallback_markdown_report()` reuses the hybrid tables/charts; short metrics stub when Bailian fails |
 | **Export** | `EXPORT_REPORT` intent wraps the last synthesis (cross-module) |
-| **Name fidelity** | Synthesis prompt rule **#15** — `area_name`, `area_sn`, and other codes must be copied **character-for-character** from tool JSON (see [all-prompt.md](./all-prompt.md)); fallback tables always use raw JSON values |
+| **Quantity unit** | **PCS** for all production quantities in deterministic blocks and synthesis prompts |
+| **Name fidelity** | Tables/charts: verbatim JSON values (Python-owned). Narrative: hybrid prompt + `_sanitize_narrative_names()` safety net (鸿志 ≠ 荣志) |
 
-Structure is guided by persona prompts (e.g. "executive summary → metrics → actions"); wording and numbers change per query and data.
+Structure for narrative sections is guided by `get_hybrid_style_block()` or module persona prompts; tables and charts are **never** LLM-generated when hybrid mode is active.
+
+See [all-prompt.md §4.3](./all-prompt.md) and [bugs.md §Resolution](./bugs.md).
 
 ---
 
@@ -125,7 +138,7 @@ Structure is guided by persona prompts (e.g. "executive summary → metrics → 
 |------|--------|
 | MCP module | `mcp_tools/production_tools.py`, `mcp_tools/production_engines.py` |
 | **Integration status** | **✅** — 10 dedicated intents in `orchestrator/tool_registry.py` |
-| NL routing | User question → Bailian intent extraction → post-correction (`intent_corrections`, `apply_colloquial_day_dates`) → production intent → MCP tool → synthesis with production analyst persona |
+| NL routing | User question → Bailian intent extraction → post-correction (`intent_corrections`, `apply_colloquial_day_dates`) → production intent → MCP tool → hybrid report (deterministic `line_breakdown` table + Mermaid chart + grounded narrative) |
 | Example | 「今天各产线的达成率如何？」→ `PRODUCTION_PLAN_ACHIEVEMENT`, `line_id="all"`, single-day range → `get_plan_achievement_rate` → per-line `line_breakdown` from `t_pm_mo_base` + `t_co_area.area_name` |
 | Bare day example | 「我要看20号各产线的达成率」on 2026-07-06 → dates `2026-06-20` (previous month’s 20th), not future July 20 |
 

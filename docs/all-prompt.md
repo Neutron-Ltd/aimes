@@ -28,7 +28,9 @@ When a user sends a text query via `POST /api/v1/query`:
 | Pass | Purpose | LLM? | Instruction language | Output |
 |------|---------|------|----------------------|--------|
 | **1 — Intent extraction** | Classify intent + extract JSON parameters | Yes (Bailian) | **zh-CN or en-US** | JSON (English property names) |
-| **2 — Report synthesis** | Turn MCP `result` into Markdown | Yes (Bailian) | **zh-CN or en-US** | Markdown in same language |
+| **1b — Deterministic block** | Tables, PCS metrics, Mermaid charts from MCP JSON | **No (Python)** | — | Markdown fragment |
+| **2 — Report synthesis** | Narrative commentary (hybrid) or full report (legacy) | Yes (Bailian) | **zh-CN or en-US** | Markdown narrative |
+| **Assembly** | `deterministic_block + narrative` when hybrid active | **No (Python)** | — | Final chat `message` |
 
 Voice queries (`POST /api/v1/query/voice`) transcribe audio first, then use the same two-pass pipeline.
 
@@ -195,9 +197,22 @@ User Query: <USER_QUERY>
 
 ## 4. Pass 2 — Report synthesis prompt
 
-**Function:** `build_synthesis_prompt(query, db_result, rag_context, locale, module)` in `orchestrator/prompts/synthesis.py`  
+**Function:** `build_synthesis_prompt(query, db_result, rag_context, locale, module, *, hybrid_mode, deterministic_preview)` in `orchestrator/prompts/synthesis.py`  
 **Called from:** `generate_ai_analysis()` in `orchestrator/report_generator.py`  
 **Timeout:** 120 seconds
+
+When MCP JSON contains renderable list keys (`line_breakdown`, `breakdown`, `devices`, etc.), **hybrid mode** activates automatically:
+
+| Phase | Owner | Output |
+|-------|-------|--------|
+| **1 — Deterministic** | Python (`_build_system_deterministic_block`) | Data overview, full tables (verbatim `area_name`, PCS units), Mermaid charts |
+| **2 — Narrative** | Bailian (`hybrid_mode=True`) | Executive summary, bottlenecks, grounded scheduling advice only |
+
+Final message: `deterministic_block + "\n\n" + narrative` (tables/charts stripped from LLM output if duplicated).
+
+**Pre-computed aggregates** injected into JSON for LLM grounding: `zero_output_line_count`, `zero_output_planned_sum`, `zero_output_lines`.
+
+---
 
 **Dynamic parts:**
 
@@ -248,6 +263,7 @@ User Query: <USER_QUERY>
 13. 当结果为全厂汇总且 JSON 中 `refinement_suggested` 为 true 时，在报告末尾用自然中文引导用户指定产线或产品型号以进一步拆分；若存在 `line_breakdown` 数组，请格式化为各产线对比表格。
 14. 计划达成率（`achievement_rate`）表示 SUM(output_qty)/SUM(plan_qty)×100，范围通常 0–150%；说明 `actual_qty`（实际产出）与 `planned_qty`（计划数量）的含义，勿与设备日志 finish_qty 混淆。
 15. **名称与编码必须原样复制**：JSON 中的 `area_name`、`area_sn`、`device_sn`、`model_code`、`mo_number`、`product_code` 等字段，在表格和正文中必须与 JSON **逐字一致**，不得改写、翻译、同义替换或替换为读音/字形相近的字（例如 JSON 为「鸿志贴片六线」时不得写成「荣志贴片六线」）；`line_breakdown`、`lines`、`devices` 等数组表格中的产线名称列必须直接使用 JSON 里的 `area_name` 原值。
+16. 产量数量统一使用 **PCS** 作为单位，不得使用「台」或「件」。
 
 请现在撰写 Markdown 报告：
 ```
@@ -293,13 +309,35 @@ Your task is to interpret structured database query results and write a clear, p
 13. When the result is a plant-wide summary and `refinement_suggested` is true in the JSON, end with a natural prompt asking which line or product to drill into; format `line_breakdown` as a comparative table when present.
 14. Plan `achievement_rate` is SUM(output_qty)/SUM(plan_qty)×100 (typically 0–150%); explain `actual_qty` vs `planned_qty`; do not confuse with equipment-log finish_qty.
 15. **Copy names and codes exactly**: fields such as `area_name`, `area_sn`, `device_sn`, `model_code`, `mo_number`, and `product_code` in tables and prose must match the JSON **character-for-character** — do not paraphrase, translate, substitute synonyms, or swap visually or phonetically similar characters (e.g. if JSON says 「鸿志贴片六线」, never write 「荣志贴片六线」); line-name columns in `line_breakdown`, `lines`, `devices`, and similar arrays must use the exact `area_name` value from JSON.
+16. Use **PCS** as the quantity unit for production counts.
 
 Write the Markdown report now:
 ```
 
 **RAG empty placeholder (en-US):** `(No supplementary knowledge-base context available.)`
 
-### 4.3 Exact name fidelity (rule #15)
+### 4.3 Hybrid synthesis (narrative-only pass)
+
+When `hybrid_mode=True`, Bailian writes **narrative only**. Tables and Mermaid charts are pre-rendered by `_build_system_deterministic_block()` in `report_generator.py`.
+
+**Hybrid prompt constraints (zh-CN / en-US):**
+
+- Output: executive summary → bottlenecks/anomalies → scheduling recommendations
+- Do NOT output Markdown tables or Mermaid blocks
+- Do NOT invent subgroup totals — use `zero_output_line_count`, `zero_output_planned_sum` from enriched JSON
+- Quantities in prose: **PCS** only (never 台 or 件)
+- Copy `area_name` character-for-character
+- Every recommendation must cite an `area_sn` from JSON
+- Zero-output lines (`actual_qty == 0`, `planned_qty > 0`): classify as material kitting or equipment downtime
+- Word limit lifted
+
+**Style block:** `get_hybrid_style_block()` in `module_personas.py` (replaces full persona table-formatting guidelines in hybrid mode).
+
+**Frontend:** Mermaid blocks rendered via `initMermaidIn()` in `frontend/src/utils/markdown.js` after chat message update.
+
+---
+
+### 4.4 Exact name fidelity (rule #15)
 
 Added to both locales to prevent Bailian from paraphrasing MES master-data labels when formatting `line_breakdown` and similar tables.
 
@@ -307,7 +345,7 @@ Added to both locales to prevent Bailian from paraphrasing MES master-data label
 |---------|------------|
 | LLM substitutes similar Chinese characters (e.g. 鸿志 → 荣志) | Rule #15 with explicit counter-example |
 | Numeric / ID fields drift | Same rule covers `area_sn`, `device_sn`, `mo_number`, `product_code`, etc. |
-| Fallback path | `_fallback_markdown_report()` renders `area_name` verbatim from JSON via `_rows_from_line_breakdown()` — no LLM involved |
+| Fallback path | `_build_system_deterministic_block()` renders full tables verbatim from JSON; hybrid fallback adds `_build_fallback_narrative_stub()` — no LLM tables |
 
 **Source of truth for line names:** `t_co_area.area_name` joined in MCP SQL (e.g. [`core/analytics/plan_achievement.py`](../core/analytics/plan_achievement.py)); synthesis must not rename values in the Markdown layer.
 
@@ -452,18 +490,26 @@ Intent routing is unavailable: {reason}. Check DASHSCOPE_API_KEY and BAILIAN_APP
 
 ### 6.5 Deterministic fallback report
 
-**Function:** `_fallback_markdown_report(query, db_result, reason, locale, module)` in `orchestrator/report_generator.py`
+**Function:** `_fallback_markdown_report(query, db_result, reason, locale, module, deterministic_block=None)` in `orchestrator/report_generator.py`
 
 **Used when:** Missing Bailian credentials, API error, timeout, empty synthesis, or pipeline exception.
 
-#### Structure (both locales)
+#### Hybrid-aware fallback (when list data present)
+
+When `deterministic_block` is provided (or built via `_build_system_deterministic_block()`):
+
+1. **Deterministic block first** — same tables/charts as the primary hybrid path (overview, PCS units, full `line_breakdown` 5-column table, Mermaid charts)
+2. Optional synthesis-failure banner
+3. **`_build_fallback_narrative_stub()`** — short metrics summary + zero-output line note (no speculative scheduling fiction)
+
+#### Legacy fallback structure (non-hybrid / empty list data)
 
 1. `### {report_title}` — from module persona
 2. Subtitle: `*MES AI 助手 — 自动摘要*` (zh) / `*MES AI Assistant — automated summary*` (en)
 3. Optional banner when synthesis failed (zh/en)
 4. **Empty result:** `### 发现` / `### Findings` + no-records message + empty hints from persona
 5. **Has data:** `### 关键指标` / `### Key Metrics` + localized field labels
-6. Markdown tables for `breakdown`, `line_breakdown`, `lines`, `devices`, etc. — **`area_name` and codes copied verbatim from JSON** (contrast with Bailian synthesis, which may drift without rule #15)
+6. Markdown tables for list keys — **`area_name` and codes copied verbatim from JSON**; quantities use **PCS**
 
 #### Empty-state body copy
 
