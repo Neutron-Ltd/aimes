@@ -598,6 +598,13 @@
   padding: 12px;
   overflow-x: hidden;
   overflow-y: auto;
+  overflow-anchor: auto;
+}
+
+.chat-scroll-anchor {
+  flex-shrink: 0;
+  height: 0;
+  width: 100%;
 }
 
 .chat-messages {

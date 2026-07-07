@@ -65,6 +65,7 @@
               <strong>{{ title }}</strong>
               <span class="thinking-text">{{ t('common.chatThinking') }}</span>
             </div>
+            <div ref="chatEndRef" class="chat-scroll-anchor" aria-hidden="true" />
           </div>
         </div>
 
@@ -159,6 +160,7 @@ const thinking = ref(false)
 const historyLoading = ref(true)
 const messages = ref([])
 const chatWindowRef = ref(null)
+const chatEndRef = ref(null)
 let messageSeed = 0
 
 const showPrompts = computed(
@@ -198,22 +200,27 @@ onMounted(async () => {
     const restored = await loadHistory()
     if (restored.length) {
       messages.value = restored
+      await scrollToBottom()
     }
   } finally {
     historyLoading.value = false
   }
 })
 
-watch(collapsed, (value) => {
+watch(collapsed, async (value) => {
   if (typeof sessionStorage === 'undefined') return
   sessionStorage.setItem(storageKey.value, value ? '1' : '0')
+  if (!value) {
+    await scrollToBottom()
+  }
 })
 
 watch(
-  messages,
+  [messages, thinking],
   async () => {
     await nextTick()
     await initMermaidIn(chatWindowRef.value)
+    await scrollToBottom()
   },
   { deep: true }
 )
@@ -229,6 +236,8 @@ function createMessage(role, content) {
 
 async function scrollToBottom() {
   await nextTick()
+  await new Promise((resolve) => requestAnimationFrame(resolve))
+  chatEndRef.value?.scrollIntoView({ block: 'end' })
   const el = chatWindowRef.value
   if (el) {
     el.scrollTop = el.scrollHeight
